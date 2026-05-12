@@ -20,15 +20,15 @@ No running servers — everything in-process.
 import sys, os, time
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from phantom.blockchain import BorderWallet, BorderChain, BandwidthProof
-from phantom.identity import (
+from border.blockchain import BorderWallet, BorderChain, BandwidthProof
+from border.identity import (
     BorderDID, ServiceType,
     VerifiableClaim, ClaimType,
     IdentityRegistry,
     ReputationEngine,
     BorderIDNode,
 )
-from phantom.ledger import BandwidthLedger
+from border.ledger import BandwidthLedger
 
 # ── Colours ───────────────────────────────────────────────
 GREEN  = "\033[92m"; YELLOW = "\033[93m"; CYAN   = "\033[96m"
@@ -232,8 +232,8 @@ def main():
     # ──────────────────────────────────────────────────────
     h("Step 10: Anchor compute node DID hash to BorderChain")
 
-    from phantom.blockchain import Transaction
-    from phantom.ledger import BandwidthLedger
+    from border.blockchain import Transaction
+    from border.ledger import BandwidthLedger
     import uuid
 
     chain  = BorderChain()

@@ -26,7 +26,7 @@ import hashlib
 # Allow running from examples/ directly
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from phantom.blockchain import (
+from border.blockchain import (
     BorderWallet,
     BorderChain,
     BandwidthProof,
@@ -35,7 +35,7 @@ from phantom.blockchain import (
     BLOCK_REWARD,
     BC_PER_GB,
 )
-from phantom.ledger import BandwidthLedger
+from border.ledger import BandwidthLedger
 
 # ──────────────────────────────────────────────────────────────────────
 # ANSI colours for pretty output

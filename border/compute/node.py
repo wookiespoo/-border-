@@ -46,8 +46,8 @@ class BorderComputeNode:
     proofs flow through here to the blockchain.
 
     Usage:
-        from phantom.blockchain import BorderWallet
-        from phantom.compute import BorderComputeNode
+        from border.blockchain import BorderWallet
+        from border.compute import BorderComputeNode
 
         wallet = BorderWallet.load("wallet.json")
         node   = BorderComputeNode(
@@ -302,7 +302,7 @@ def serve_compute(
     wallet = None
     if wallet_path:
         try:
-            from phantom.blockchain import BorderWallet
+            from border.blockchain import BorderWallet
             wallet = BorderWallet.load(wallet_path)
             logger.info(f"[ComputeNode] Loaded wallet: {wallet.address}")
         except Exception as e:

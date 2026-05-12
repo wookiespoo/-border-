@@ -26,7 +26,7 @@ from phantom import (
     PRIORITY_EMERGENCY,
     BandwidthLedger,
 )
-from phantom.node import create_app_from_node
+from border.node import create_app_from_node
 import uvicorn
 
 

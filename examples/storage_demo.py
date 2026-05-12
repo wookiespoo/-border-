@@ -28,15 +28,15 @@ import uuid
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from phantom.blockchain import (
+from border.blockchain import (
     BorderWallet, BorderChain, BandwidthProof, StorageProofRecord,
     BLOCK_REWARD, BC_PER_GB, BC_PER_GB_PER_DAY, MIN_BYTES_PER_BLOCK,
 )
-from phantom.storage import (
+from border.storage import (
     FileChunker, FileManifest, StorageChallenge, StorageProof,
     BorderStorageNode, BC_PER_GB_PER_DAY as STORAGE_RATE,
 )
-from phantom.ledger import BandwidthLedger
+from border.ledger import BandwidthLedger
 
 GREEN  = "\033[92m"
 YELLOW = "\033[93m"
@@ -53,7 +53,7 @@ def store(text):print(f"  {MAGENTA}💾{RESET} {text}")
 
 def make_bandwidth_proof(relay_wallet, client_id, mb):
     import uuid as _u
-    from phantom.ledger import BandwidthLedger
+    from border.ledger import BandwidthLedger
     ledger = BandwidthLedger(node_id="relay_demo")
     bytes_fwd = int(mb * 1024 * 1024)
     session_id = f"sess_{_u.uuid4().hex[:8]}"
@@ -123,7 +123,7 @@ async def main():
     h("Step 3: Chunk + encrypt a file")
 
     # Simulate a 9MB file (3 chunks of 3MB each for demo)
-    from phantom.storage.chunk import CHUNK_SIZE
+    from border.storage.chunk import CHUNK_SIZE
     chunk_size  = 3 * 1024 * 1024  # 3MB chunks for demo
     import os as _os; file_data = _os.urandom(9 * 1024 * 1024)  # 9MB random
     file_id     = f"file_{uuid.uuid4().hex[:16]}"

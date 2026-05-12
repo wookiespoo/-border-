@@ -27,16 +27,16 @@ No running servers. No GPU required. Everything in-process.
 import sys, os, time, hashlib, uuid
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from phantom.blockchain import (
+from border.blockchain import (
     BorderWallet, BorderChain, BandwidthProof, ComputeProofRecord,
     BLOCK_REWARD, BC_PER_GB, MIN_BYTES_PER_BLOCK,
 )
-from phantom.ledger  import BandwidthLedger
-from phantom.infer   import (
+from border.ledger  import BandwidthLedger
+from border.infer   import (
     InferJob, InferType, InferMarket, InferWorker, InferDaemon,
     ModelRegistry, ModelBackend, BC_PER_1K_TOKENS_INPUT, BC_PER_1K_TOKENS_OUTPUT,
 )
-from phantom.render  import (
+from border.render  import (
     RenderJob, RenderType, RenderMarket, RenderWorker, RenderDaemon, RenderBackend,
     BC_PER_IMAGE_1024, BC_PER_VIDEO_FRAME,
 )

@@ -8,11 +8,11 @@ Three layers:
   3. LoRa Last Mile   — radio broadcast for the truly disconnected
 
 Quick start — run a relay node:
-    from phantom import serve_relay
+    from border import serve_relay
     serve_relay(node_id="my-relay", region="EU", port=8080)
 
 Quick start — connect as a client:
-    from phantom import BorderClient
+    from border import BorderClient
     import asyncio
 
     async def main():

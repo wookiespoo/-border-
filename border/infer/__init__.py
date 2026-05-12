@@ -5,7 +5,7 @@ Your GPU. Your models. You earn BC per token.
 No OpenAI. No Anthropic. No logs. No surveillance.
 
 Usage:
-    from phantom.infer import InferJob, InferType, InferMarket, InferDaemon
+    from border.infer import InferJob, InferType, InferMarket, InferDaemon
 
     # Client submits a job
     job = InferJob.create(

@@ -188,7 +188,7 @@ if __name__ == "__main__":
     parser.add_argument("--stake",    type=float, default=10.0)
     args = parser.parse_args()
 
-    from phantom.blockchain import BorderWallet
+    from border.blockchain import BorderWallet
     wallet  = BorderWallet.load(args.wallet)
     market  = InferMarket()
     backend = ModelBackend(args.backend)

@@ -14,8 +14,8 @@ The daemon:
 
 Usage:
     # Simple start (auto-detect GPUs)
-    from phantom.compute import WorkerDaemon
-    from phantom.blockchain import BorderWallet
+    from border.compute import WorkerDaemon
+    from border.blockchain import BorderWallet
 
     wallet = BorderWallet.load("wallet.json")  # or BorderWallet.create()
     daemon = WorkerDaemon(
@@ -481,7 +481,7 @@ def main():
     parser.add_argument("--max-jobs", default=2, type=int,   help="Max concurrent jobs")
     args = parser.parse_args()
 
-    from phantom.blockchain import BorderWallet
+    from border.blockchain import BorderWallet
     import os
 
     if os.path.exists(args.wallet):

@@ -23,7 +23,7 @@ import time
 import hashlib
 import json
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..")))
 
 from border.blockchain import (
     BorderWallet,
@@ -140,7 +140,7 @@ def simulate_job_execution(job: ComputeJob, worker_wallet: BorderWallet, gpu_spe
         output_hash=output_hash,
         price_bc=price_bc,
     )
-    proof.worker_signature = worker_wallet.sign(proof.hash().encode())
+    proof.worker_signature = worker_wallet.sign(proof.hash())
     return proof, result, compute_seconds
 
 
@@ -248,8 +248,6 @@ def main():
 
     for job in jobs:
         accepted, reason = market.submit_job(job)
-        # retry assignment in case worker was busy from previous submit
-        market.retry_pending_jobs()
         status = job.status
         worker_short = (job.worker_address or "")[:20]
         ok(f"{job.job_type:<12} | {job.model_id:<16} | {status} | worker: {worker_short}...")
@@ -273,9 +271,6 @@ def main():
     compute_proofs_for_chain = []
 
     for job in jobs:
-        # worker may still be PENDING if previous job freed it — retry assignment
-        if job.status == JobStatus.PENDING:
-            market.retry_pending_jobs()
         if job.status != JobStatus.ASSIGNED:
             continue
 

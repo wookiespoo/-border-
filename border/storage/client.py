@@ -12,7 +12,7 @@ The client:
   5. Can reconstruct the file from any copy of the manifest
 
 Usage:
-    from phantom.storage import StorageClient
+    from border.storage import StorageClient
 
     client = StorageClient(
         owner_address="BC_...",

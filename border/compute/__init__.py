@@ -7,18 +7,18 @@ No middleman. No platform fees. You own the hardware, you earn the coin.
 
 Usage:
     # Start a market node
-    from phantom.compute import BorderComputeNode, serve_compute
+    from border.compute import BorderComputeNode, serve_compute
     serve_compute(chain_endpoint="http://localhost:7777", port=8888)
 
     # Run a worker daemon on your GPU rig
-    from phantom.compute import WorkerDaemon
-    from phantom.blockchain import BorderWallet
+    from border.compute import WorkerDaemon
+    from border.blockchain import BorderWallet
     wallet = BorderWallet.load("wallet.json")
     daemon = WorkerDaemon(wallet=wallet, market_endpoint="http://localhost:8888")
     daemon.run()
 
     # Submit a job as a client
-    from phantom.compute import ComputeJob, JobType
+    from border.compute import ComputeJob, JobType
     job = ComputeJob.create(
         job_type=JobType.INFERENCE,
         client_address="BC_...",

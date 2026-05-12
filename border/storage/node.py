@@ -8,8 +8,8 @@ Every byte stored = passive BorderCoin income.
 You never see the plaintext — clients encrypt before uploading.
 
 Usage:
-    from phantom.storage import BorderStorageNode, serve_storage
-    from phantom.blockchain import BorderWallet
+    from border.storage import BorderStorageNode, serve_storage
+    from border.blockchain import BorderWallet
 
     wallet = BorderWallet.load("wallet.json")
     serve_storage(
@@ -404,13 +404,13 @@ def serve_storage(
     wallet = None
     if wallet_path:
         try:
-            from phantom.blockchain import BorderWallet
+            from border.blockchain import BorderWallet
             wallet = BorderWallet.load(wallet_path)
         except Exception as e:
             logger.warning(f"Could not load wallet: {e}")
 
     if not wallet:
-        from phantom.blockchain import BorderWallet
+        from border.blockchain import BorderWallet
         wallet = BorderWallet.create()
         logger.info(f"[StorageNode] Created new wallet: {wallet.address}")
 

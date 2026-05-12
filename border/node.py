@@ -41,7 +41,7 @@ class BorderRelayNode:
         node = BorderRelayNode(node_id="mynode")
 
         # Relay + earn BorderCoin automatically
-        from phantom.blockchain import BorderWallet
+        from border.blockchain import BorderWallet
         wallet = BorderWallet.load("wallet.json")
         node = BorderRelayNode(
             node_id="mynode",

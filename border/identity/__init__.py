@@ -5,7 +5,7 @@ Every node (relay, compute, storage) gets a DID tied to its wallet.
 Claims and reputation scores flow through the same BorderChain.
 
 Usage:
-    from phantom.identity import BorderDID, IdentityRegistry, ReputationEngine
+    from border.identity import BorderDID, IdentityRegistry, ReputationEngine
 
     wallet = BorderWallet.create()
     did    = BorderDID.from_wallet(wallet, handle="alice.border")

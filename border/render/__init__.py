@@ -5,7 +5,7 @@ Image · Video · 3D — pay BC per frame.
 Your GPU renders. You earn. No Midjourney. No Runway. No cloud.
 
 Usage:
-    from phantom.render import RenderJob, RenderType, RenderMarket, RenderDaemon
+    from border.render import RenderJob, RenderType, RenderMarket, RenderDaemon
 
     job = RenderJob.create(
         render_type=RenderType.IMAGE,
