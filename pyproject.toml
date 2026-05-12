@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "phantom-net"
+version = "0.1.0"
+description = "Project Phantom — Free internet for everyone. Invisible, unblockable, unstoppable."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.11"
+keywords = ["privacy", "censorship", "internet-freedom", "lora", "mesh", "crypto", "bandwidth"]
+
+dependencies = [
+    "fastapi>=0.111.0",
+    "uvicorn[standard]>=0.29.0",
+    "httpx>=0.27.0",
+    "pydantic>=2.7.0",
+    "cryptography>=42.0.0",
+]
+
+[project.optional-dependencies]
+lora = [
+    "RPi.GPIO>=0.7.1",
+    "spidev>=3.6",
+]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+]
+
+[project.urls]
+Homepage  = "https://github.com/wookiespoo/phantom"
+Spec      = "https://github.com/wookiespoo/phantom/blob/main/spec/PHANTOM-v0.1.md"
