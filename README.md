@@ -1,300 +1,305 @@
-# 🌐 Border
+# Border Protocol
 
-**Decentralised internet infrastructure. Owned by no one. Powered by everyone.**
+**A decentralized internet infrastructure network.**
 
-Border is a full-stack decentralised protocol — censorship-resistant relay, GPU compute marketplace, encrypted storage, private AI inference, on-demand rendering, self-sovereign identity, and community governance. All connected by one currency: **BorderCoin (BC)**.
-
-No company controls it. No server can be shut down. Every node that joins makes it stronger.
+Border is a peer-to-peer protocol that rewards nodes for providing real compute, storage, bandwidth, DNS, and identity services. Every service unit earns BorderCoin (BC) — a cryptographic token with a fixed supply schedule identical to Bitcoin's.
 
 ---
 
-## The Ecosystem
+## Table of Contents
+
+- [Overview](#overview)
+- [Architecture](#architecture)
+- [Modules](#modules)
+- [Getting Started](#getting-started)
+- [Running a Node](#running-a-node)
+- [Light Client / CLI](#light-client--cli)
+- [Testnet](#testnet)
+- [Token Economics](#token-economics)
+- [Security Model](#security-model)
+- [Development](#development)
+
+---
+
+## Overview
+
+| Layer | What it does |
+|---|---|
+| **Blockchain** | Proof-of-Bandwidth + Proof-of-Compute + Proof-of-Storage consensus |
+| **P2P** | Gossip protocol, peer discovery, binary-search chain sync |
+| **Storage** | ChaCha20-Poly1305 encrypted file chunking, challenge/proof system |
+| **Compute** | GPU job market, worker daemons, signed proof-of-work |
+| **DNS** | On-chain `.border` name registry, signed ownership transfers |
+| **Identity** | Ed25519 DIDs, verifiable claims, reputation engine |
+| **DAO** | On-chain governance, signed vote submission |
+| **Obfuscation** | HKDF-derived session keys, traffic shaping relay |
+
+---
+
+## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                    BorderCoin (BC)                       │
-│        Universal currency · Powers every layer           │
-└──────────────────┬──────────────────────────────────────┘
-                   │
-     ┌─────────────┼─────────────┐
-     ▼             ▼             ▼
-┌─────────┐  ┌───────────┐  ┌──────────────┐
-│  Border │  │BorderChain│  │ BorderWallet │
-│  Relay  │  │ P2P node  │  │ Ed25519 keys │
-│BC/GB fwd│  │PoB mining │  │send·recv·sign│
-└─────────┘  └───────────┘  └──────────────┘
-     │             │
-     ▼             ▼
-┌──────────────┐  ┌──────────────┐  ┌──────────────┐
-│BorderCompute │  │ BorderInfer  │  │ BorderRender │
-│GPU job market│  │Private AI    │  │Image·Video·3D│
-│BC/GPU-hour   │  │BC/1K tokens  │  │BC/frame      │
-└──────────────┘  └──────────────┘  └──────────────┘
-     │
-     ▼
-┌──────────────┐  ┌──────────────┐  ┌──────────────┐
-│ BorderStore  │  │  BorderID    │  │  BorderDAO   │
-│Encrypted     │  │Self-sovereign│  │BC holders    │
-│BC/GB/day     │  │identity+rep  │  │vote on proto │
-└──────────────┘  └──────────────┘  └──────────────┘
+                        ┌──────────────────────────────┐
+                        │         border-node           │
+                        │  (unified process runner)     │
+                        └────────────┬─────────────────┘
+                                     │
+          ┌──────────────────────────┼──────────────────────────┐
+          │                          │                          │
+   ┌──────▼──────┐           ┌───────▼──────┐          ┌───────▼──────┐
+   │  Blockchain  │           │     P2P      │          │  Subsystems  │
+   │  chain.py    │◄──────────│  discovery   │          │  storage     │
+   │  block.py    │           │  gossip      │          │  compute     │
+   │  wallet.py   │           │  sync        │          │  dns         │
+   │  transaction │           │  server      │          │  identity    │
+   └─────────────┘           └─────────────┘          └──────────────┘
 ```
 
 ---
 
 ## Modules
 
-| Module | What it does | How you earn |
-|---|---|---|
-| **Border Relay** | Routes censored traffic through obfuscated HTTPS | 1 BC per GB forwarded |
-| **BorderChain** | Proof-of-Bandwidth blockchain — mining IS relaying | 1 BC block reward |
-| **BorderWallet** | Ed25519 keypair, BC addresses, sign/verify | — |
-| **BorderCompute** | GPU job marketplace — inference, render, train, custom | 2 BC per GPU-hour |
-| **BorderInfer** | Private AI inference — llama3, mistral, phi3, embeddings | 0.0008 BC / 1K tokens |
-| **BorderRender** | Image, video, 3D rendering — SDXL, AnimateDiff, FLUX | 0.002 BC per image |
-| **BorderStore** | Encrypted decentralised storage with challenge proofs | 0.01 BC / GB / day |
-| **BorderID** | Self-sovereign identity, verifiable claims, reputation | — |
-| **BorderDAO** | On-chain governance — BC holders vote on protocol changes | — |
+### `border/blockchain/`
+- **`chain.py`** — `BorderChain`: add/validate blocks, mempool, balance lookup, persistence
+- **`block.py`** — `Block`, `BandwidthProof`, `ComputeProofRecord`, `StorageProofRecord`
+- **`transaction.py`** — `Transaction`: canonical JSON signing, Ed25519 verification, public-key→address binding
+- **`wallet.py`** — `BorderWallet`: Ed25519 key pair, scrypt+ChaCha20-Poly1305 encrypted save/load
+- **`economics.py`** — halving schedule, supply cap, fee market floor, `block_reward(height)`
+
+### `border/p2p/`
+- **`node.py`** — `P2PNode`: high-level object bundling discovery + gossip + sync
+- **`discovery.py`** — `PeerDiscovery`: bootstrap seeds, ping, peer-exchange, disk persistence
+- **`gossip.py`** — `GossipRouter`: push-fanout gossip with TTL and dedup cache
+- **`sync.py`** — `ChainSync`: binary-search fork finding + batch block download
+- **`server.py`** — Flask Blueprint: `/p2p/ping`, `/p2p/peers`, `/p2p/gossip`, `/p2p/blocks`
+
+### `border/storage/`
+- **`chunk.py`** — `FileChunker`: ChaCha20-Poly1305 encryption (AAD = chunk_id), manifest
+- **`proof.py`** — `StorageProof`: canonical JSON hash, Ed25519 node signature
+- **`node.py`** — `BorderStorageNode`: upload/download server, challenge-response proofs
+- **`client.py`** — `BorderStorageClient`: upload + ChaCha20-Poly1305 download
+
+### `border/compute/`
+- **`job.py`** — `ComputeJob`, `ComputeProof`: worker_public_key + Ed25519 signature
+- **`market.py`** — `ComputeMarket`: job matching, signature verification on proof submission
+- **`daemon.py`** — `WorkerDaemon`: GPU job runner (OS-level sandboxing required in production)
+- **`worker.py`** — `Worker`: registration, GPU spec advertisement
+
+### `border/dns/`
+- **`registry.py`** — `DNSRegistry`: signed register/transfer/add-record (forgery rejected)
+- **`node.py`** — `BorderDNSNode`: HTTP API passing owner_public_key + owner_signature
+- **`resolver.py`** — `DNSResolver`: local + remote resolution
+
+### `border/identity/`
+- **`did.py`** — `BorderDID`: Ed25519 decentralized identifier
+- **`claim.py`** — `VerifiableClaim`: Ed25519 verification (replaces SECP256k1)
+- **`registry.py`** — `IdentityRegistry`: DID + claim storage
+- **`reputation.py`** — `ReputationEngine`: stake-weighted scoring
+
+### `border/dao/`
+- **`governance.py`** — `Governance`: proposal lifecycle, signature-verified vote casting
+- **`vote.py`** — `Vote`: `verify_signature(public_key_b64)` enforced before counting
+- **`proposal.py`** — `Proposal`: quorum + threshold enforcement
+- **`treasury.py`** — `Treasury`: multi-sig fund release
+
+### `border/node_runner.py`
+Unified process that boots all subsystems. Exposes:
+- `GET  /status`
+- `GET  /chain/height`, `/chain/block/<n>`, `/chain/balance/<addr>`
+- `POST /chain/tx`, `POST /chain/mine`
+- All `/p2p/*` routes
+
+### `border/cli.py`
+Light-client CLI — no local chain required.
+
+### `border/obfuscate.py`
+Traffic relay with HKDF (salt=session_id), X25519 ECDH, ChaCha20-Poly1305.
 
 ---
 
-## Quick Start
-
-### Create a wallet
-
-```python
-from border.blockchain import BorderWallet
-
-wallet = BorderWallet.create()
-wallet.save("my_wallet.json")
-print(f"Address: {wallet.address}")
-print(f"Balance: {chain.get_balance(wallet.address)} BC")
-```
-
-### Run a relay node (earn BC for forwarding traffic)
+## Getting Started
 
 ```bash
-pip install -e .
-python examples/run_relay.py --wallet my_wallet.json
+git clone https://github.com/<you>/phantom
+cd phantom
+pip install flask requests cryptography
 ```
 
-### Run a GPU compute worker (earn BC per job)
-
-```python
-from border.compute import WorkerDaemon
-from border.blockchain import BorderWallet
-
-wallet = BorderWallet.load("my_wallet.json")
-daemon = WorkerDaemon(wallet=wallet, market_endpoint="http://localhost:8888")
-daemon.run()   # auto-detects your GPUs, polls for jobs, earns BC
-```
-
-### Run a private AI inference worker (earn BC per token)
-
-```python
-from border.infer import InferDaemon, ModelBackend
-from border.blockchain import BorderWallet
-
-wallet = BorderWallet.load("my_wallet.json")
-# Runs ollama locally, polls market, earns BC for every token generated
-daemon = InferDaemon(
-    wallet=wallet, market=market,
-    model_ids=["llama3:8b", "mistral:7b"],
-    total_vram_gb=12.0,
-    backend=ModelBackend.OLLAMA,
-)
-daemon.run()
-```
-
-### Run a render worker (earn BC per frame)
-
-```python
-from border.render import RenderDaemon, RenderBackend
-from border.blockchain import BorderWallet
-
-wallet = BorderWallet.load("my_wallet.json")
-daemon = RenderDaemon(
-    wallet=wallet, market=market,
-    model_ids=["sdxl", "flux-schnell", "animatediff"],
-    total_vram_gb=12.0,
-    backend=RenderBackend.COMFYUI,
-)
-daemon.run()
-```
-
-### Run a storage node (earn BC per GB stored)
-
-```python
-from border.storage import BorderStorageNode
-
-node = BorderStorageNode(
-    node_address=wallet.address,
-    storage_path="./data",
-    capacity_bytes=4 * 1024**3,   # 4 TB
-    stake_bc=10.0,
-)
-node.run(port=6666)
-```
-
----
-
-## Run the demos (no servers needed)
-
-Every module has a self-contained in-process demo:
+Run all demos end-to-end:
 
 ```bash
-# Blockchain + relay
-python examples/blockchain_demo.py
-
-# GPU compute marketplace
-python examples/compute_demo.py
-
-# Encrypted decentralised storage
+python examples/p2p_demo.py
+python examples/node_runner_demo.py
+python examples/cli_demo.py
+python examples/economics_demo.py
+BORDER_NETWORK=testnet python examples/testnet_demo.py
 python examples/storage_demo.py
-
-# Self-sovereign identity + reputation
-python examples/identity_demo.py
-
-# Private AI inference + GPU rendering
-python examples/infer_render_demo.py
-
-# Community governance (DAO)
+python examples/dns_demo.py
 python examples/dao_demo.py
 ```
 
 ---
 
-## Project Structure
+## Running a Node
+
+```bash
+# Start a full node on port 9000, seeding from a known peer
+python -m border.node_runner \
+  --host 0.0.0.0 \
+  --port 9000 \
+  --data-dir ~/.border \
+  --peers seed.border.network:9000 \
+  --storage --compute --dns
+
+# Check your node
+curl http://localhost:9000/status
+curl http://localhost:9000/wallet
+curl http://localhost:9000/chain/height
+```
+
+**Environment variables** (override CLI flags):
+
+| Variable | Default |
+|---|---|
+| `BORDER_HOST` | `0.0.0.0` |
+| `BORDER_PORT` | `9000` |
+| `BORDER_DATA_DIR` | `~/.border` |
+| `BORDER_PEERS` | _(empty)_ |
+| `BORDER_NETWORK` | `mainnet` |
+
+---
+
+## Light Client / CLI
+
+```bash
+# Create a wallet
+python -m border.cli wallet new
+
+# Check balance
+python -m border.cli wallet info
+
+# Send BC
+python -m border.cli wallet send BC_<recipient_address> 1.5
+
+# Register a .border domain
+python -m border.cli dns register myname
+
+# Check chain
+python -m border.cli chain status
+python -m border.cli chain balance BC_<address>
+python -m border.cli chain block 42
+
+# Point at a different node
+python -m border.cli --node-url http://node.border.network:9000 chain status
+```
+
+---
+
+## Testnet
+
+A 3-node local testnet can be started with Docker Compose:
+
+```bash
+cd testnet/
+docker-compose up --build
+```
+
+Or without Docker:
+
+```bash
+BORDER_NETWORK=testnet bash testnet/run_local_testnet.sh start
+# Check:
+curl http://127.0.0.1:9001/status
+# Stop:
+bash testnet/run_local_testnet.sh stop
+```
+
+**Testnet vs mainnet differences:**
+
+| Parameter | Mainnet | Testnet |
+|---|---|---|
+| Min bytes/block | 100 MB | 1 MB |
+| Chain ID | 1 | 1337 |
+| Network ID | `border-mainnet` | `border-testnet-1` |
+| Bootstrap peers | TBD | `seed1.testnet.border.network:9000` |
+
+---
+
+## Token Economics
+
+| Parameter | Value |
+|---|---|
+| Maximum supply | 21,000,000 BC |
+| Initial block reward | 50 BC |
+| Halving interval | 210,000 blocks (~4 years) |
+| Minimum tx fee | 0.0001 BC |
+| Storage reward | 0.01 BC / GB / day |
+| Compute reward | 2.0 BC / GPU-hour |
+| Bandwidth reward | 1.0 BC / GB forwarded |
+
+Block rewards follow a Bitcoin-style halving schedule. Service rewards (storage, compute, bandwidth) are added on top of the base block reward and are also capped by the remaining supply headroom.
+
+---
+
+## Security Model
+
+All cryptographic operations use modern primitives:
+
+| Operation | Primitive |
+|---|---|
+| Signing / verification | Ed25519 |
+| Symmetric encryption | ChaCha20-Poly1305 (AEAD) |
+| Key derivation (wallet) | scrypt (N=32768, r=8, p=1) |
+| Key derivation (relay) | HKDF-SHA256 (salt=session_id) |
+| Key exchange | X25519 ECDH |
+
+**Key enforcements:**
+- Every transaction binds `public_key` to `from_address` at verification time
+- DNS register/transfer requires a signed owner intent verified against the stored owner address
+- Storage proofs carry `node_public_key` and are re-verified when blocks arrive from peers
+- DAO votes must be signed; `cast_vote()` rejects unsigned votes when a public key is provided
+- Compute proofs carry `worker_public_key`; `submit_proof()` verifies the signature
+- `compute/daemon.py` `_run_custom` documents the requirement for OS-level sandboxing (seccomp/nsjail/gVisor) in production
+
+---
+
+## Development
 
 ```
 border/
-├── blockchain/        BorderCoin chain, wallet, transactions, P2P node
-├── compute/           GPU job marketplace + worker daemon
-├── infer/             Private AI inference (ollama / llama.cpp)
-├── render/            Image, video, 3D rendering (ComfyUI / A1111)
-├── storage/           Encrypted chunked storage + challenge proofs
-├── identity/          BorderID — DIDs, claims, reputation engine
-├── dao/               Governance — proposals, voting, treasury
-├── node.py            Border relay node
-├── client.py          Border relay client
-├── ledger.py          Bandwidth receipt tracking
-├── discovery.py       Node discovery
-├── obfuscate.py       X25519 + ChaCha20-Poly1305 obfuscation
-└── lora.py            LoRa radio interface (sim + hardware)
+  blockchain/     chain, block, transaction, wallet, economics
+  p2p/            discovery, gossip, sync, server, node
+  storage/        chunk, proof, node, client
+  compute/        job, market, daemon, worker
+  dns/            registry, node, resolver, record
+  identity/       did, claim, registry, reputation
+  dao/            governance, vote, proposal, treasury
+  infer/          inference job market
+  render/         render job market
+  testnet/        config (testnet parameter overrides)
+  cli.py          light client CLI
+  node_runner.py  unified node process
+  obfuscate.py    traffic relay + obfuscation layer
 
 examples/
-├── blockchain_demo.py     Relay → proofs → block mined
-├── compute_demo.py        GPU jobs → BC earned
-├── storage_demo.py        Upload → challenge → download
-├── identity_demo.py       DIDs → claims → reputation leaderboard
-├── infer_render_demo.py   AI tokens + render frames → BC
-├── dao_demo.py            Proposals → votes → protocol updated
-└── run_relay.py           Production relay node starter
+  p2p_demo.py
+  node_runner_demo.py
+  cli_demo.py
+  economics_demo.py
+  testnet_demo.py
+  storage_demo.py
+  dns_demo.py
+  dao_demo.py
+  compute_demo.py
+  identity_demo.py
+
+testnet/
+  genesis.json
+  docker-compose.yml
+  Dockerfile
+  run_local_testnet.sh
 ```
 
 ---
 
-## BorderCoin Economics
-
-| Action | Reward |
-|---|---|
-| Forward 1 GB of censored traffic | 1.0 BC |
-| Produce a valid block | 1.0 BC |
-| Run a GPU job for 1 hour | 2.0 BC |
-| Generate 1M AI tokens | ~0.8 BC |
-| Render 500 images (SDXL) | ~1.0 BC |
-| Store 1 TB for 1 day | ~10.24 BC |
-| Answer a storage challenge | 0.0001 BC |
-
-Blocks require ≥100MB of verified bandwidth receipts. You cannot mine BorderCoin without actually helping someone get internet access or providing real compute/storage to the network.
-
----
-
-## BorderID — Self-Sovereign Identity
-
-Every node gets a DID tied to its wallet:
-
-```
-did:border:BC_a1b2c3...
-```
-
-Nodes self-attest capabilities (GPU count, region, stake), earn reputation from chain proofs, and can be vouched for by other nodes. High-reputation nodes get priority job routing. No registrar. No central authority.
-
----
-
-## BorderDAO — Community Governance
-
-BC holders govern the protocol:
-
-- **PARAMETER** proposals — change fees, rewards, thresholds
-- **TREASURY** proposals — spend protocol fees on development grants
-- **PROTOCOL** proposals — enable new features (e.g. BorderDNS)
-- **SLASH** proposals — penalise misbehaving nodes
-
-Voting is stake-weighted (1 BC = 1 vote), 7-day window, 10% quorum required.
-
----
-
-## Relay Architecture
-
-```
-[Censored User]
-      ↓
-  LoRa Radio          ← no internet required, 2–15km range
-      ↓
-[Border Bridge Node]
-      ↓
-  Obfuscated HTTPS    ← looks like normal web traffic to DPI
-      ↓
-[Border Relay Node]   ← running anywhere with free internet
-      ↓
-   The Internet
-```
-
-Traffic is encrypted with **X25519 + ChaCha20-Poly1305** and disguised as normal HTTPS. Cover domains, random User-Agents, random padding. Deep packet inspection sees nothing suspicious.
-
-For users with no internet at all, a cheap **LoRa radio module** ($15–30) reaches a Border bridge node 2–15km away. No WiFi. No mobile data. Just radio.
-
----
-
-## Hardware for GPU Workers
-
-Border works with any CUDA or ROCm GPU:
-
-| GPU | VRAM | Best for |
-|---|---|---|
-| RX 580 8GB | 8 GB | llama3:8b inference, SDXL rendering |
-| RTX 3060 12GB | 12 GB | mistral:7b, SDXL, AnimateDiff |
-| RTX 3080 12GB | 12 GB | mixtral:8x7b, FLUX, video |
-| RTX 4090 24GB | 24 GB | llama3:70b, LoRA training |
-
-The more GPUs, the more BC earned per hour.
-
----
-
-## Philosophy
-
-Most censorship circumvention tools are charities — they depend on donations that dry up. Border replaces altruism with economics. Forward traffic for censored users and earn money. Run GPU compute and earn money. Store files and earn money. The harder the censorship, the more valuable the network, the more people run nodes.
-
-The "work" in Proof of Bandwidth is real. Someone in Tehran, Beijing, or Havana got to read a news article. That's the block reward justification — not burning electricity on meaningless math.
-
----
-
-## Contributing
-
-Border needs help with:
-- **Real-world relay testing** against live censorship infrastructure
-- **Mobile clients** (Android/iOS) for censored users
-- **LoRa hardware testing** across different environments
-- **Cryptographic audit** of the obfuscation and blockchain
-- **Bootstrap nodes** — if you have a server outside a censored region, run one
-- **BorderDNS** — on-chain human-readable names (`alice.border`) — coming next
-
----
-
-## License
-
-MIT — do whatever you want with it. Help people.
-
----
-
-*Built with the belief that access to information is a human right.*
+*Border is an open protocol. Run a node. Earn BC.*

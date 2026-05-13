@@ -14,10 +14,17 @@ from typing import List, Optional
 from .transaction import Transaction
 
 MIN_BYTES_PER_BLOCK  = 100 * 1024 * 1024
-BLOCK_REWARD         = 1.0
-BC_PER_GB            = 1.0
-BC_PER_COMPUTE_HOUR  = 2.0
-BC_PER_GB_PER_DAY    = 0.01
+# Token economics — single source of truth
+from .economics import (
+    INITIAL_BLOCK_REWARD as BLOCK_REWARD,
+    BC_PER_GB,
+    BC_PER_COMPUTE_HOUR,
+    BC_PER_GB_PER_DAY,
+    block_reward,
+    validate_fee,
+    fee_sort_key,
+    MAX_SUPPLY,
+)
 
 
 @dataclass
@@ -162,7 +169,8 @@ class Block:
             miner_address="BC_GENESIS_00000000000000000000000000000000",
             bandwidth_proofs=[],
             transactions=[Transaction.coinbase(
-                to_address="BC_GENESIS_00000000000000000000000000000000", reward=0.0)],
+                to_address="BC_GENESIS_00000000000000000000000000000000",
+                reward=0.0, deterministic_id="genesis")],
         )
         block.block_hash = block.compute_hash()
         return block
@@ -180,15 +188,34 @@ class Block:
         }
         return hashlib.sha256(json.dumps(content, sort_keys=True).encode()).hexdigest()
 
-    def finalize(self) -> None:
+    def finalize(self, current_supply: float = 0.0) -> None:
+        """
+        Compute coinbase reward using height-aware halving schedule.
+        Caps total emission at MAX_SUPPLY.
+        Sorts pending user txns by fee (highest first) before sealing.
+        """
+        from .economics import supply_headroom
+        base_reward   = block_reward(self.index)
         total_bw      = sum(p.border_coin_value for p in self.bandwidth_proofs)
         total_compute = sum(p.compute_reward_bc for p in self.compute_proofs)
         total_storage = sum(p.reward_bc for p in self.storage_proofs)
         total_fees    = sum(tx.fee for tx in self.transactions
                            if tx.from_address != Transaction.COINBASE_ADDRESS)
-        total_reward  = BLOCK_REWARD + total_bw + total_compute + total_storage + total_fees
+        # Sort user transactions by fee descending (fee market)
+        user_txs  = sorted(
+            [tx for tx in self.transactions if tx.from_address != Transaction.COINBASE_ADDRESS],
+            key=lambda tx: -tx.fee,
+        )
+        self.transactions = user_txs
+
+        raw_reward    = base_reward + total_bw + total_compute + total_storage + total_fees
+        # Clamp to remaining supply headroom
+        headroom      = supply_headroom(current_supply)
+        total_reward  = round(min(raw_reward, headroom), 8)
+
         self.transactions.insert(0, Transaction.coinbase(
-            to_address=self.miner_address, reward=round(total_reward, 8)))
+            to_address=self.miner_address, reward=total_reward,
+            deterministic_id=str(self.index)))
         self.block_hash = self.compute_hash()
 
     @property

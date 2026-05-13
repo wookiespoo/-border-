@@ -1,0 +1,94 @@
+version: "3.9"
+
+# Border Testnet — 3-node local cluster
+# 
+# Usage:
+#   cd testnet/
+#   docker-compose up --build
+#
+# Nodes:
+#   node1: seed node   port 9001  (bootstrap for the others)
+#   node2: miner node  port 9002  seeds -> node1
+#   node3: full node   port 9003  seeds -> node1
+#
+# After startup:
+#   curl http://localhost:9001/status
+#   curl http://localhost:9001/chain/height
+
+services:
+  node1:
+    build:
+      context: ..
+      dockerfile: testnet/Dockerfile
+    container_name: border-node1
+    ports:
+      - "9001:9000"
+    volumes:
+      - node1_data:/data
+    environment:
+      BORDER_PORT: "9000"
+      BORDER_DATA_DIR: "/data"
+      BORDER_PEERS: ""
+    command: >
+      python -m border.node_runner
+        --host 0.0.0.0 --port 9000
+        --data-dir /data
+        --storage --compute --dns
+    networks:
+      - border_net
+
+  node2:
+    build:
+      context: ..
+      dockerfile: testnet/Dockerfile
+    container_name: border-node2
+    ports:
+      - "9002:9000"
+    volumes:
+      - node2_data:/data
+    environment:
+      BORDER_PORT: "9000"
+      BORDER_DATA_DIR: "/data"
+      BORDER_PEERS: "node1:9000"
+    command: >
+      python -m border.node_runner
+        --host 0.0.0.0 --port 9000
+        --data-dir /data
+        --peers node1:9000
+        --storage --compute
+    depends_on:
+      - node1
+    networks:
+      - border_net
+
+  node3:
+    build:
+      context: ..
+      dockerfile: testnet/Dockerfile
+    container_name: border-node3
+    ports:
+      - "9003:9000"
+    volumes:
+      - node3_data:/data
+    environment:
+      BORDER_PORT: "9000"
+      BORDER_DATA_DIR: "/data"
+      BORDER_PEERS: "node1:9000"
+    command: >
+      python -m border.node_runner
+        --host 0.0.0.0 --port 9000
+        --data-dir /data
+        --peers node1:9000
+    depends_on:
+      - node1
+    networks:
+      - border_net
+
+volumes:
+  node1_data:
+  node2_data:
+  node3_data:
+
+networks:
+  border_net:
+    driver: bridge

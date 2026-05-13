@@ -11,7 +11,9 @@ import time
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
-from .block import Block, BandwidthProof, ComputeProofRecord, StorageProofRecord, MIN_BYTES_PER_BLOCK, BLOCK_REWARD, BC_PER_GB, BC_PER_COMPUTE_HOUR, BC_PER_GB_PER_DAY
+from . import block as _block_module
+from .block import Block, BandwidthProof, ComputeProofRecord, StorageProofRecord, BLOCK_REWARD, BC_PER_GB, BC_PER_COMPUTE_HOUR, BC_PER_GB_PER_DAY
+from .economics import validate_fee, fee_sort_key, MAX_SUPPLY
 from .transaction import Transaction
 
 logger = logging.getLogger("border.blockchain")
@@ -41,13 +43,18 @@ class BorderChain:
         valid_proofs = [p for p in available_proofs if p.receipt_id not in self._spent_receipts]
         total_bytes = sum(p.bytes_forwarded for p in valid_proofs)
 
-        if total_bytes < MIN_BYTES_PER_BLOCK:
-            logger.info(f"[Chain] Not enough bandwidth: {total_bytes/(1024*1024):.1f}MB / {MIN_BYTES_PER_BLOCK/(1024*1024):.0f}MB")
+        if total_bytes < _block_module.MIN_BYTES_PER_BLOCK:
+            logger.info(f"[Chain] Not enough bandwidth: {total_bytes/(1024*1024):.1f}MB / {_block_module.MIN_BYTES_PER_BLOCK/(1024*1024):.0f}MB")
             return None
 
         valid_compute  = [p for p in self._pending_compute_proofs if p.proof_id not in self._spent_compute_proofs]
         valid_storage  = [p for p in self._pending_storage_proofs if p.proof_id not in self._spent_storage_proofs]
-        pending_txs    = [tx for tx in (transactions or self._mempool) if tx.verify()]
+        # Fee market: reject below floor, then sort highest-fee first
+        pending_txs = [
+            tx for tx in (transactions or self._mempool)
+            if tx.verify() and validate_fee(tx)
+        ]
+        pending_txs.sort(key=fee_sort_key)
 
         block = Block(
             index=len(self._chain), timestamp=time.time(),
@@ -58,7 +65,7 @@ class BorderChain:
             storage_proofs=valid_storage,
             transactions=pending_txs,
         )
-        block.finalize()
+        block.finalize(current_supply=self.total_supply)
         return block
 
     def add_block(self, block: Block) -> Tuple[bool, str]:
@@ -132,6 +139,9 @@ class BorderChain:
     def add_transaction(self, tx: Transaction) -> bool:
         if not tx.verify():
             return False
+        if not validate_fee(tx):
+            logger.warning(f"[Chain] TX {tx.tx_id} fee {tx.fee} below minimum")
+            return False
         if self.get_balance(tx.from_address) < tx.amount + tx.fee:
             return False
         self._mempool.append(tx)
@@ -144,8 +154,8 @@ class BorderChain:
             return False, "previous_hash mismatch"
         if block.compute_hash() != block.block_hash:
             return False, "hash invalid"
-        if block.total_bytes < MIN_BYTES_PER_BLOCK:
-            return False, f"insufficient bandwidth: {block.total_bytes} < {MIN_BYTES_PER_BLOCK}"
+        if block.total_bytes < _block_module.MIN_BYTES_PER_BLOCK:
+            return False, f"insufficient bandwidth: {block.total_bytes} < {_block_module.MIN_BYTES_PER_BLOCK}"
         for proof in block.bandwidth_proofs:
             if proof.receipt_id in self._spent_receipts:
                 return False, f"double-spend: receipt {proof.receipt_id}"
@@ -167,7 +177,7 @@ class BorderChain:
                 return False, f"Block #{i}: broken link"
             if block.compute_hash() != block.block_hash:
                 return False, f"Block #{i}: hash invalid"
-            if block.total_bytes < MIN_BYTES_PER_BLOCK:
+            if block.total_bytes < _block_module.MIN_BYTES_PER_BLOCK:
                 return False, f"Block #{i}: insufficient bandwidth"
         return True, "chain valid"
 
@@ -249,6 +259,7 @@ class BorderChain:
             "spent_compute_proofs":       len(self._spent_compute_proofs),
             "spent_storage_proofs":       len(self._spent_storage_proofs),
             "block_reward_bc":            BLOCK_REWARD,
+            "max_supply":                 MAX_SUPPLY,
             "bc_per_gb":                  BC_PER_GB,
             "bc_per_compute_hour":        BC_PER_COMPUTE_HOUR,
             "bc_per_gb_per_day":          BC_PER_GB_PER_DAY,
@@ -266,3 +277,21 @@ class BorderChain:
         self._chain = [Block.from_dict(b) for b in data["chain"]]
         self._rebuild_spent_set()
         logger.info(f"[Chain] Loaded: {len(self._chain)} blocks")
+
+    # -------------------------------------------------------------------
+    # P2P helpers
+    # -------------------------------------------------------------------
+
+    def block_hash_at(self, index: int) -> Optional[str]:
+        """Return block_hash at a given index, or None if out of range."""
+        if 0 <= index < len(self._chain):
+            return self._chain[index].block_hash
+        return None
+
+    def blocks_range(self, start: int, end: int) -> List[Block]:
+        """Return blocks[start:end+1] clamped to chain length."""
+        hi = min(end + 1, len(self._chain))
+        return self._chain[max(0, start):hi]
+
+    def __len__(self) -> int:
+        return len(self._chain)

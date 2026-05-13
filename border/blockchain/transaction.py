@@ -56,15 +56,27 @@ class Transaction:
         )
 
     @classmethod
-    def coinbase(cls, to_address: str, reward: float) -> "Transaction":
-        """Block reward transaction -- no sender, no fee."""
+    def coinbase(cls, to_address: str, reward: float,
+                 deterministic_id: str = "") -> "Transaction":
+        """Block reward transaction -- no sender, no fee.
+
+        Pass deterministic_id (e.g. block_index) to make the tx_id
+        reproducible across nodes (required for genesis block hash stability).
+        """
+        if deterministic_id:
+            import hashlib
+            tx_id = "cb_" + hashlib.sha256(
+                f"{to_address}:{reward}:{deterministic_id}".encode()
+            ).hexdigest()[:16]
+        else:
+            tx_id = f"cb_{uuid.uuid4().hex[:16]}"
         return cls(
-            tx_id        = f"cb_{uuid.uuid4().hex[:16]}",
+            tx_id        = tx_id,
             from_address = cls.COINBASE_ADDRESS,
             to_address   = to_address,
             amount       = reward,
             fee          = 0.0,
-            timestamp    = time.time(),
+            timestamp    = 0.0 if deterministic_id else time.time(),
             public_key   = "",
             signature    = "COINBASE",
         )
