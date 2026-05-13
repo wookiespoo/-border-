@@ -39,6 +39,7 @@ from .blockchain.wallet import BorderWallet
 from .p2p.node import P2PNode
 from .p2p.server import create_p2p_blueprint
 from .faucet import Faucet, make_faucet_blueprint
+from .dashboard import make_dashboard_blueprint
 
 logging.basicConfig(
     level=logging.INFO,
@@ -131,6 +132,7 @@ class BorderNode:
         self.app = Flask("border-node")
         self._register_core_routes()
         self.app.register_blueprint(create_p2p_blueprint(self.p2p))
+        self.app.register_blueprint(make_dashboard_blueprint())
 
         # Optional subsystems (mounted on sub-ports via threads)
         self._storage_node = None
