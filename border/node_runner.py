@@ -31,6 +31,7 @@ from typing import List, Optional
 from flask import Flask, jsonify, request
 
 from .blockchain.chain import BorderChain
+from .relay import BorderRelay
 from .blockchain.wallet import BorderWallet
 # BorderChainNode available at border.blockchain.node if needed
 from .p2p.node import P2PNode
@@ -111,6 +112,13 @@ class BorderNode:
             data_dir=str(self.data_dir),
         )
 
+        # Relay layer — proof-of-bandwidth + mining daemon
+        self.relay = BorderRelay(
+            wallet=self.wallet,
+            chain=self.chain,
+            p2p=self.p2p,
+        )
+
         # Flask app
         self.app = Flask("border-node")
         self._register_core_routes()
@@ -140,6 +148,7 @@ class BorderNode:
             return jsonify({
                 "node": self.p2p.status(),
                 "chain": self.chain.stats,
+                "relay": self.relay.stats(),
                 "wallet_address": self.wallet.address,
                 "subsystems": {
                     "storage": self._storage_node is not None,
@@ -200,6 +209,26 @@ class BorderNode:
                 "public_key": self.wallet.public_key_b64,
             })
 
+        @app.route("/relay/status", methods=["GET"])
+        def relay_status():
+            return jsonify(self.relay.stats())
+
+        @app.route("/relay/session/open", methods=["POST"])
+        def relay_open():
+            session = self.relay.open_session()
+            import base64
+            return jsonify({
+                "session_id": session.session_id,
+                "public_key": base64.b64encode(session.our_public_key_bytes).decode(),
+            })
+
+        @app.route("/relay/session/close", methods=["POST"])
+        def relay_close():
+            data = request.get_json(force=True) or {}
+            sid = data.get("session_id", "")
+            self.relay.close_session(sid)
+            return jsonify({"ok": True})
+
     # -------------------------------------------------------------------
     # Optional subsystem boot helpers
     # -------------------------------------------------------------------
@@ -239,6 +268,7 @@ class BorderNode:
 
     def run(self) -> None:
         self.p2p.start()
+        self.relay.start()
         logger.info(f"[Node] Border node starting  http://{self.host}:{self.port}")
         logger.info(f"[Node] Wallet  {self.wallet.address}")
         logger.info(f"[Node] Chain   height={self.chain.height}")
