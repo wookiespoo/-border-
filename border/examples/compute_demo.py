@@ -23,7 +23,7 @@ import time
 import hashlib
 import json
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..")))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from border.blockchain import (
     BorderWallet,
