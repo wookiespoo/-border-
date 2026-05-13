@@ -7,12 +7,13 @@ Boots all subsystems in a single process:
   - BorderStorageNode  (optional, --storage)
   - BorderComputeNode  (optional, --compute)
   - BorderDNSNode      (optional, --dns)
+  - LoRaBroadcaster    (optional, --lora)  last-mile radio broadcast
 
 Usage
 -----
   python -m border.node_runner --port 9000 --data-dir ~/.border \
       --peers seed.border.network:9000 \
-      --storage --compute --dns
+      --storage --compute --dns --lora
 
 Environment variables (override CLI flags):
   BORDER_PORT, BORDER_DATA_DIR, BORDER_PEERS
@@ -21,6 +22,7 @@ Environment variables (override CLI flags):
 from __future__ import annotations
 
 import argparse
+import asyncio
 import logging
 import os
 import sys
@@ -79,6 +81,8 @@ class BorderNode:
     data_dir    : persistent storage root
     peers       : bootstrap peer addresses  host:port
     enable_storage, enable_compute, enable_dns : optional subsystems
+    enable_lora   : start LoRa broadcaster (simulation if no hardware)
+    lora_freq_mhz : LoRa frequency in MHz (default 868.0)
     """
 
     def __init__(
@@ -90,6 +94,8 @@ class BorderNode:
         enable_storage: bool = False,
         enable_compute: bool = False,
         enable_dns: bool = False,
+        enable_lora: bool = False,
+        lora_freq_mhz: float = 868.0,
     ):
         self.host = host
         self.port = port
@@ -128,6 +134,8 @@ class BorderNode:
         self._storage_node = None
         self._compute_node = None
         self._dns_node = None
+        self._lora_broadcaster = None
+        self._lora_freq_mhz = lora_freq_mhz
 
         if enable_storage:
             self._init_storage()
@@ -135,6 +143,8 @@ class BorderNode:
             self._init_compute()
         if enable_dns:
             self._init_dns()
+        if enable_lora:
+            self._init_lora()
 
     # -------------------------------------------------------------------
     # Core HTTP routes
@@ -154,6 +164,7 @@ class BorderNode:
                     "storage": self._storage_node is not None,
                     "compute": self._compute_node is not None,
                     "dns":     self._dns_node is not None,
+                    "lora":    self._lora_broadcaster is not None,
                 },
             })
 
@@ -262,6 +273,109 @@ class BorderNode:
         except Exception as e:
             logger.warning(f"[Node] DNS subsystem failed to load: {e}")
 
+    def _init_lora(self) -> None:
+        """Initialise LoRa broadcaster and register Flask routes."""
+        try:
+            from .lora import LoRaBroadcaster, LoRaContent, PRIORITY_NEWS, PRIORITY_EMERGENCY
+            self._lora_broadcaster = LoRaBroadcaster(
+                frequency_mhz=self._lora_freq_mhz,
+                simulation_mode=True,  # falls back automatically if no hardware
+            )
+            self._register_lora_routes()
+            self._start_lora_loop()
+            logger.info(
+                f"[Node] LoRaBroadcaster subsystem loaded  "
+                f"freq={self._lora_freq_mhz}MHz  "
+                f"sim={self._lora_broadcaster.simulation_mode}"
+            )
+        except Exception as e:
+            logger.warning(f"[Node] LoRa subsystem failed to load: {e}")
+
+    def _register_lora_routes(self) -> None:
+        """Mount LoRa HTTP endpoints onto the Flask app."""
+        app = self.app
+        broadcaster = self._lora_broadcaster
+
+        @app.route("/lora/status", methods=["GET"])
+        def lora_status():
+            if broadcaster is None:
+                return jsonify({"error": "LoRa subsystem not enabled"}), 503
+            return jsonify(broadcaster.stats)
+
+        @app.route("/lora/queue", methods=["POST"])
+        def lora_queue():
+            """Queue a news article for LoRa broadcast.
+
+            Body JSON::
+                {
+                  "title": "Headline",
+                  "body":  "Article text …",
+                  "url":   "https://…",          // optional
+                  "type":  "news" | "emergency"  // optional, default "news"
+                }
+            """
+            if broadcaster is None:
+                return jsonify({"error": "LoRa subsystem not enabled"}), 503
+            data = request.get_json(force=True) or {}
+            title = data.get("title", "").strip()
+            body  = data.get("body",  "").strip()
+            url   = data.get("url",   "")
+            kind  = data.get("type",  "news").lower()
+            if not title or not body:
+                return jsonify({"ok": False, "error": "title and body required"}), 400
+            if kind == "emergency":
+                broadcaster.queue_emergency(body)
+            else:
+                broadcaster.queue_news(title, body, url)
+            return jsonify({"ok": True, "queue_size": broadcaster.queue_size})
+
+        @app.route("/lora/broadcast", methods=["POST"])
+        def lora_broadcast_now():
+            """Manually trigger broadcast of the next queued item."""
+            if broadcaster is None:
+                return jsonify({"error": "LoRa subsystem not enabled"}), 503
+            if broadcaster.queue_size == 0:
+                return jsonify({"ok": False, "error": "queue is empty"}), 204
+            # Run broadcast_next() in the LoRa event loop
+            future = asyncio.run_coroutine_threadsafe(
+                broadcaster.broadcast_next(), self._lora_loop
+            )
+            try:
+                content = future.result(timeout=30)
+                return jsonify({
+                    "ok": True,
+                    "broadcast": content.title if content else None,
+                    "queue_size": broadcaster.queue_size,
+                })
+            except Exception as e:
+                return jsonify({"ok": False, "error": str(e)}), 500
+
+    def _start_lora_loop(self) -> None:
+        """Spin up a dedicated asyncio loop in a daemon thread.
+
+        The loop auto-broadcasts every 60 s while the queue is non-empty.
+        """
+        loop = asyncio.new_event_loop()
+        self._lora_loop = loop
+
+        broadcaster = self._lora_broadcaster
+
+        async def _auto_broadcast() -> None:
+            while True:
+                try:
+                    if broadcaster and broadcaster.queue_size > 0:
+                        await broadcaster.broadcast_next()
+                except Exception as exc:
+                    logger.warning(f"[LoRa] auto-broadcast error: {exc}")
+                await asyncio.sleep(60)
+
+        def _run() -> None:
+            loop.run_until_complete(_auto_broadcast())
+
+        t = threading.Thread(target=_run, daemon=True, name="lora-broadcast-loop")
+        t.start()
+        logger.debug("[Node] LoRa broadcast daemon thread started")
+
     # -------------------------------------------------------------------
     # Run
     # -------------------------------------------------------------------
@@ -273,6 +387,11 @@ class BorderNode:
         logger.info(f"[Node] Wallet  {self.wallet.address}")
         logger.info(f"[Node] Chain   height={self.chain.height}")
         logger.info(f"[Node] Peers   seeds={len(self.p2p.discovery.get_peers(False))}")
+        if self._lora_broadcaster is not None:
+            logger.info(
+                f"[Node] LoRa    freq={self._lora_freq_mhz}MHz  "
+                f"sim={self._lora_broadcaster.simulation_mode}"
+            )
         self.app.run(host=self.host, port=self.port, threaded=True)
 
 
@@ -294,6 +413,9 @@ def main(argv: Optional[List[str]] = None) -> None:
     parser.add_argument("--storage",  action="store_true", help="Enable storage node")
     parser.add_argument("--compute",  action="store_true", help="Enable compute market")
     parser.add_argument("--dns",      action="store_true", help="Enable DNS registry")
+    parser.add_argument("--lora",     action="store_true", help="Enable LoRa broadcaster")
+    parser.add_argument("--lora-freq", type=float, default=868.0,
+                        help="LoRa frequency in MHz (default 868.0 for EU; use 915.0 for US)")
     parser.add_argument("--verbose",  action="store_true")
 
     args = parser.parse_args(argv)
@@ -314,6 +436,8 @@ def main(argv: Optional[List[str]] = None) -> None:
         enable_storage=args.storage,
         enable_compute=args.compute,
         enable_dns=args.dns,
+        enable_lora=args.lora,
+        lora_freq_mhz=args.lora_freq,
     )
     node.run()
 
