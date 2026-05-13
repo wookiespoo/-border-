@@ -22,6 +22,20 @@ Commands
 
   border compute submit <script> Submit a compute job
   border compute status <job_id> Check a job's status
+  border compute list            List jobs in the market
+
+  border identity register       Register your DID on the node
+  border identity show           Show your DID document
+  border identity add-claim <type> <data_json>
+
+  border staking stake <amount> <role>   Stake BC for a role
+  border staking unstake                 Release stake
+  border staking status                  Show your stake info
+
+  border payment open <receiver> <deposit>   Open a payment channel
+  border payment send <channel_id> <amount>  Send micro-payment
+  border payment close <channel_id>          Close channel + settle
+  border payment list                        List your channels
 
   border node start              Start a full node (wraps node_runner)
 
@@ -151,8 +165,10 @@ def cmd_chain_status(args, cfg):
     print(f"Total supply   : {chain.get('total_supply')} BC")
     print(f"Mempool txns   : {chain.get('mempool_size')}")
     print(f"Connected peers: {node.get('peers_reachable')}")
-    print(f"Subsystems     : storage={d['subsystems']['storage']}  "
-          f"compute={d['subsystems']['compute']}  dns={d['subsystems']['dns']}")
+    subs = d.get("subsystems", {})
+    print(f"Subsystems     : storage={subs.get('storage')}  "
+          f"compute={subs.get('compute')}  dns={subs.get('dns')}  "
+          f"lora={subs.get('lora')}")
 
 def cmd_chain_balance(args, cfg):
     resp = requests.get(f"{_node(cfg)}/chain/balance/{args.address}", timeout=5)
@@ -263,11 +279,13 @@ def cmd_compute_status(args, cfg):
 def cmd_node_start(args, cfg):
     from .node_runner import main as node_main
     extra = []
-    if args.port:     extra += ["--port", str(args.port)]
-    if args.peers:    extra += ["--peers"] + args.peers
-    if args.storage:  extra += ["--storage"]
-    if args.compute:  extra += ["--compute"]
-    if args.dns:      extra += ["--dns"]
+    if args.port:      extra += ["--port", str(args.port)]
+    if args.peers:     extra += ["--peers"] + args.peers
+    if args.storage:   extra += ["--storage"]
+    if args.compute:   extra += ["--compute"]
+    if args.dns:       extra += ["--dns"]
+    if getattr(args, "lora", False):      extra += ["--lora"]
+    if getattr(args, "lora_freq", None):  extra += ["--lora-freq", str(args.lora_freq)]
     node_main(extra)
 
 def cmd_config_set(args, cfg):
@@ -317,6 +335,7 @@ def build_parser() -> argparse.ArgumentParser:
     cs.add_parser("status")
     cb = cs.add_parser("balance"); cb.add_argument("address")
     cbl = cs.add_parser("block");  cbl.add_argument("index", type=int)
+    cs.add_parser("mine")
 
     # -- dns --
     dns = sub.add_parser("dns")
@@ -330,12 +349,45 @@ def build_parser() -> argparse.ArgumentParser:
     ss = store.add_subparsers(dest="cmd")
     su = ss.add_parser("upload");   su.add_argument("file")
     sd = ss.add_parser("download"); sd.add_argument("hash"); sd.add_argument("outfile")
+    ss.add_parser("list")
 
     # -- compute --
     comp = sub.add_parser("compute")
     cos = comp.add_subparsers(dest="cmd")
     coj = cos.add_parser("submit"); coj.add_argument("script")
     cost = cos.add_parser("status"); cost.add_argument("job_id")
+    cos.add_parser("list")
+
+    # -- identity --
+    ident = sub.add_parser("identity")
+    ids = ident.add_subparsers(dest="cmd")
+    ids.add_parser("register")
+    ids.add_parser("show")
+    iac = ids.add_parser("add-claim")
+    iac.add_argument("claim_type", help="e.g. NODE_TYPE, REGION, BANDWIDTH")
+    iac.add_argument("data",       help="JSON string, e.g. '{\"node_type\": \"RELAY\"}'")
+
+    # -- staking --
+    staking = sub.add_parser("staking")
+    sks = staking.add_subparsers(dest="cmd")
+    sk_stake = sks.add_parser("stake")
+    sk_stake.add_argument("amount")
+    sk_stake.add_argument("role", help="relay|compute|storage|infer|render")
+    sks.add_parser("unstake")
+    sks.add_parser("status")
+
+    # -- payment --
+    pay = sub.add_parser("payment")
+    pays = pay.add_subparsers(dest="cmd")
+    po = pays.add_parser("open")
+    po.add_argument("receiver", help="Receiver Border address")
+    po.add_argument("deposit",  help="Amount of BC to deposit")
+    ps = pays.add_parser("send")
+    ps.add_argument("channel_id")
+    ps.add_argument("amount")
+    ps.add_argument("--memo", default="")
+    pays.add_parser("close").add_argument("channel_id")
+    pays.add_parser("list")
 
     # -- node --
     node = sub.add_parser("node")
@@ -346,6 +398,8 @@ def build_parser() -> argparse.ArgumentParser:
     ns.add_argument("--storage", action="store_true")
     ns.add_argument("--compute", action="store_true")
     ns.add_argument("--dns",     action="store_true")
+    ns.add_argument("--lora",    action="store_true")
+    ns.add_argument("--lora-freq", type=float, default=868.0)
 
     # -- config --
     config = sub.add_parser("config")
@@ -418,6 +472,269 @@ def cmd_wallet_recover(args, cfg):
     print(f"  Saved to: {wp}")
 
 
+
+# ---------------------------------------------------------------------------
+# chain mine
+# ---------------------------------------------------------------------------
+
+def cmd_chain_mine(args, cfg):
+    """Mine the next block using the node wallet."""
+    resp = requests.post(f"{_node(cfg)}/chain/mine", timeout=30)
+    d = resp.json()
+    if d.get("ok"):
+        print(f"Block mined: #{d['block']}  hash={d['hash'][:16]}...")
+    else:
+        print(f"Mining failed: {d.get('error', d)}")
+        sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
+# compute list
+# ---------------------------------------------------------------------------
+
+def cmd_compute_list(args, cfg):
+    resp = requests.get(f"{_node(cfg)}/compute/jobs", timeout=10)
+    jobs = resp.json() if resp.ok else []
+    if not jobs:
+        print("No jobs found.")
+        return
+    for j in jobs:
+        print(f"  {j.get('job_id','?')[:12]}  status={j.get('status','?')}  "
+              f"gpu={j.get('gpu_type','any')}  submitted={j.get('submitted_at','?')}")
+
+
+# ---------------------------------------------------------------------------
+# storage list
+# ---------------------------------------------------------------------------
+
+def cmd_storage_list(args, cfg):
+    resp = requests.get(f"{_node(cfg)}/storage/list", timeout=10)
+    files = resp.json() if resp.ok else []
+    if not files:
+        print("No files stored.")
+        return
+    for f in files:
+        print(f"  {f.get('file_hash','?')[:16]}  size={f.get('size','?')}  "
+              f"chunks={f.get('chunks','?')}")
+
+
+# ---------------------------------------------------------------------------
+# identity
+# ---------------------------------------------------------------------------
+
+def cmd_identity_register(args, cfg):
+    w = _load_wallet(cfg, password=args.password or None)
+    from .identity.did import BorderDID
+    did = BorderDID.from_wallet(w)
+    doc = did.to_dict()
+    resp = requests.post(f"{_node(cfg)}/identity/register", json=doc, timeout=10)
+    d = resp.json()
+    if d.get("ok") or d.get("registered"):
+        print(f"DID registered: {did.did}")
+    else:
+        print(f"Failed: {d}")
+        sys.exit(1)
+
+def cmd_identity_show(args, cfg):
+    w = _load_wallet(cfg, password=args.password or None)
+    from .identity.did import BorderDID
+    did = BorderDID.from_wallet(w)
+    print(f"DID     : {did.did}")
+    print(f"Address : {did.wallet_address}")
+    # Attempt to fetch from node
+    try:
+        resp = requests.get(f"{_node(cfg)}/identity/{did.did}", timeout=5)
+        if resp.ok:
+            doc = resp.json()
+            print(f"Services: {doc.get('services', [])}")
+            print(f"Claims  : {doc.get('claims', [])}")
+    except Exception:
+        print("(node unreachable — showing local DID only)")
+    import json as _j
+    print(_j.dumps(did.to_document(), indent=2))
+
+def cmd_identity_add_claim(args, cfg):
+    w = _load_wallet(cfg, password=args.password or None)
+    from .identity.did import BorderDID
+    from .identity.claim import VerifiableClaim, ClaimType
+    import json as _j
+    did = BorderDID.from_wallet(w)
+    # Parse claim type
+    try:
+        claim_type = ClaimType[args.claim_type.upper()]
+    except KeyError:
+        valid = [c.name for c in ClaimType]
+        print(f"Unknown claim type '{args.claim_type}'. Valid: {valid}")
+        sys.exit(1)
+    try:
+        data = _j.loads(args.data)
+    except Exception:
+        print(f"claim_data must be valid JSON, got: {args.data}")
+        sys.exit(1)
+    claim = VerifiableClaim.create(
+        issuer_did  = did.did,
+        subject_did = did.did,
+        claim_type  = claim_type,
+        claim_data  = data,
+    )
+    claim.sign(w)
+    resp = requests.post(f"{_node(cfg)}/identity/claim", json=claim.to_dict(), timeout=10)
+    d = resp.json()
+    if d.get("ok"):
+        print(f"Claim added: {claim.claim_id[:16]}  type={claim_type.value}")
+    else:
+        print(f"Failed: {d}")
+        sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
+# staking
+# ---------------------------------------------------------------------------
+
+def cmd_staking_stake(args, cfg):
+    w = _load_wallet(cfg, password=args.password or None)
+    sig = w.sign(f"stake:{args.amount}:{args.role}".encode())
+    resp = requests.post(f"{_node(cfg)}/staking/stake", json={
+        "address":    w.address,
+        "amount":     float(args.amount),
+        "role":       args.role,
+        "public_key": w.public_key_b64,
+        "signature":  sig,
+    }, timeout=10)
+    d = resp.json()
+    if d.get("ok"):
+        print(f"Staked {args.amount} BC as {args.role}")
+    else:
+        print(f"Stake failed: {d.get('error', d)}")
+        sys.exit(1)
+
+def cmd_staking_unstake(args, cfg):
+    w = _load_wallet(cfg, password=args.password or None)
+    sig = w.sign(b"unstake")
+    resp = requests.post(f"{_node(cfg)}/staking/unstake", json={
+        "address":    w.address,
+        "public_key": w.public_key_b64,
+        "signature":  sig,
+    }, timeout=10)
+    d = resp.json()
+    if d.get("ok"):
+        print(f"Unstaked successfully")
+    else:
+        print(f"Unstake failed: {d.get('error', d)}")
+        sys.exit(1)
+
+def cmd_staking_status(args, cfg):
+    w = _load_wallet(cfg, password=args.password or None)
+    resp = requests.get(f"{_node(cfg)}/staking/status/{w.address}", timeout=5)
+    d = resp.json()
+    staked = d.get("staked", 0.0)
+    role   = d.get("role", "—")
+    total  = d.get("total_staked", "?")
+    print(f"Address   : {w.address}")
+    print(f"Staked    : {staked} BC  role={role}")
+    print(f"Net total : {total} BC staked across all nodes")
+
+
+# ---------------------------------------------------------------------------
+# payment channels
+# ---------------------------------------------------------------------------
+
+def cmd_payment_open(args, cfg):
+    w = _load_wallet(cfg, password=args.password or None)
+    from .payments import ChannelManager
+    mgr = ChannelManager(chain=None)  # local-only for now
+    ok, reason, ch = mgr.open_channel(
+        sender_wallet    = w,
+        receiver_address = args.receiver,
+        deposit_amount   = float(args.deposit),
+    )
+    if not ok:
+        print(f"Failed: {reason}")
+        sys.exit(1)
+    # Persist channel to data dir
+    import json as _j
+    data_dir = Path(cfg.get("data_dir", "~/.border")).expanduser()
+    ch_dir   = data_dir / "channels"
+    ch_dir.mkdir(parents=True, exist_ok=True)
+    (ch_dir / f"{ch.channel_id}.json").write_text(_j.dumps(ch.to_dict(), indent=2))
+    print(f"Channel opened: {ch.channel_id}")
+    print(f"  Sender   : {ch.sender_address}")
+    print(f"  Receiver : {ch.receiver_address}")
+    print(f"  Deposit  : {ch.deposited} BC")
+
+def cmd_payment_send(args, cfg):
+    w = _load_wallet(cfg, password=args.password or None)
+    import json as _j
+    from .payments import ChannelManager, PaymentChannel, PaymentReceipt
+    data_dir = Path(cfg.get("data_dir", "~/.border")).expanduser()
+    ch_file  = data_dir / "channels" / f"{args.channel_id}.json"
+    if not ch_file.exists():
+        print(f"Channel not found: {args.channel_id}")
+        sys.exit(1)
+    ch  = PaymentChannel.from_dict(_j.loads(ch_file.read_text()))
+    mgr = ChannelManager(chain=None)
+    mgr._channels[ch.channel_id] = ch
+    mgr._receipt_log[ch.channel_id] = []
+    mgr._received_nonces[ch.channel_id] = 0
+    ok, reason, receipt = mgr.send(ch.channel_id, float(args.amount), w, memo=args.memo or "")
+    if not ok:
+        print(f"Failed: {reason}")
+        sys.exit(1)
+    # Save updated channel state
+    ch_file.write_text(_j.dumps(ch.to_dict(), indent=2))
+    # Save receipt
+    rcpt_dir = data_dir / "receipts"
+    rcpt_dir.mkdir(parents=True, exist_ok=True)
+    (rcpt_dir / f"{receipt.receipt_id}.json").write_text(_j.dumps(receipt.to_dict(), indent=2))
+    print(f"Receipt #{receipt.nonce}  amount={receipt.amount:.8f} BC cumulative")
+    print(f"  Receipt ID : {receipt.receipt_id}")
+    print(f"  Signed     : {bool(receipt.sender_signature)}")
+
+def cmd_payment_close(args, cfg):
+    w = _load_wallet(cfg, password=args.password or None)
+    import json as _j
+    from .payments import ChannelManager, PaymentChannel
+    data_dir = Path(cfg.get("data_dir", "~/.border")).expanduser()
+    ch_file  = data_dir / "channels" / f"{args.channel_id}.json"
+    if not ch_file.exists():
+        print(f"Channel not found: {args.channel_id}")
+        sys.exit(1)
+    ch  = PaymentChannel.from_dict(_j.loads(ch_file.read_text()))
+    mgr = ChannelManager(chain=None)
+    mgr._channels[ch.channel_id] = ch
+    mgr._receipt_log[ch.channel_id] = []
+    mgr._received_nonces[ch.channel_id] = 0
+    ok, reason = mgr.close(ch.channel_id, w)
+    if not ok:
+        print(f"Close failed: {reason}")
+        sys.exit(1)
+    ok2, reason2 = mgr.settle(ch.channel_id, w)
+    ch_file.write_text(_j.dumps(ch.to_dict(), indent=2))
+    print(f"Channel closed: {ch.channel_id}")
+    print(f"  Paid to receiver : {ch.balance_receiver:.8f} BC")
+    print(f"  Returned to sender: {ch.balance_sender:.8f} BC")
+    print(f"  Settlement: {reason2}")
+
+def cmd_payment_list(args, cfg):
+    import json as _j
+    from .payments import PaymentChannel
+    data_dir = Path(cfg.get("data_dir", "~/.border")).expanduser()
+    ch_dir   = data_dir / "channels"
+    if not ch_dir.exists():
+        print("No channels found.")
+        return
+    files = sorted(ch_dir.glob("*.json"))
+    if not files:
+        print("No channels found.")
+        return
+    for f in files:
+        ch = PaymentChannel.from_dict(_j.loads(f.read_text()))
+        print(f"  {ch.channel_id[:12]}  state={ch.state.value:<8}  "
+              f"deposit={ch.deposited:.4f}  paid={ch.cumulative_paid:.4f}  "
+              f"recv={ch.receiver_address[:12]}")
+
+
+
 DISPATCH = {
     ("wallet",  "new"):      cmd_wallet_new,
     ("wallet",  "info"):     cmd_wallet_info,
@@ -432,11 +749,24 @@ DISPATCH = {
     ("dns",     "transfer"): cmd_dns_transfer,
     ("storage", "upload"):   cmd_storage_upload,
     ("storage", "download"): cmd_storage_download,
-    ("compute", "submit"):   cmd_compute_submit,
-    ("compute", "status"):   cmd_compute_status,
-    ("node",    "start"):    cmd_node_start,
-    ("config",  "show"):     cmd_config_show,
-    ("config",  "set"):      cmd_config_set,
+    ("compute", "submit"):       cmd_compute_submit,
+    ("compute", "status"):       cmd_compute_status,
+    ("compute", "list"):         cmd_compute_list,
+    ("storage", "list"):         cmd_storage_list,
+    ("chain",   "mine"):         cmd_chain_mine,
+    ("identity","register"):     cmd_identity_register,
+    ("identity","show"):         cmd_identity_show,
+    ("identity","add-claim"):    cmd_identity_add_claim,
+    ("staking", "stake"):        cmd_staking_stake,
+    ("staking", "unstake"):      cmd_staking_unstake,
+    ("staking", "status"):       cmd_staking_status,
+    ("payment", "open"):         cmd_payment_open,
+    ("payment", "send"):         cmd_payment_send,
+    ("payment", "close"):        cmd_payment_close,
+    ("payment", "list"):         cmd_payment_list,
+    ("node",    "start"):        cmd_node_start,
+    ("config",  "show"):         cmd_config_show,
+    ("config",  "set"):          cmd_config_set,
 }
 
 def main(argv=None):
