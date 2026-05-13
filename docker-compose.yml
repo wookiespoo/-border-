@@ -1,0 +1,94 @@
+# Border Protocol — local testnet
+# Brings up 3 nodes: bootstrap + relay + compute
+#
+# Usage:
+#   docker compose up --build          # start all nodes
+#   docker compose up bootstrap        # start only bootstrap
+#   docker compose logs -f relay       # tail relay logs
+#   docker compose down -v             # stop + remove volumes
+#
+# Each node stores its chain DB and wallet in its own named volume.
+
+version: "3.9"
+
+services:
+
+  # ── Bootstrap node ────────────────────────────────────────────────────────
+  # First node to start; others peer to it.
+  bootstrap:
+    build: .
+    container_name: border-bootstrap
+    command:
+      - "--host=0.0.0.0"
+      - "--port=5000"
+      - "--p2p-port=6000"
+      - "--persist=/data/chain.db"
+      - "--node-type=RELAY"
+    ports:
+      - "5000:5000"   # REST API
+      - "6000:6000"   # P2P
+    volumes:
+      - bootstrap_data:/data
+    environment:
+      - BORDER_NETWORK=testnet
+      - PYTHONUNBUFFERED=1
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:5000/chain/info')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ── Relay node ────────────────────────────────────────────────────────────
+  relay:
+    build: .
+    container_name: border-relay
+    command:
+      - "--host=0.0.0.0"
+      - "--port=5000"
+      - "--p2p-port=6000"
+      - "--persist=/data/chain.db"
+      - "--node-type=RELAY"
+      - "--bootstrap=bootstrap:6000"
+    ports:
+      - "5001:5000"
+      - "6001:6000"
+    volumes:
+      - relay_data:/data
+    environment:
+      - BORDER_NETWORK=testnet
+      - PYTHONUNBUFFERED=1
+    depends_on:
+      bootstrap:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── Compute node ──────────────────────────────────────────────────────────
+  compute:
+    build: .
+    container_name: border-compute
+    command:
+      - "--host=0.0.0.0"
+      - "--port=5000"
+      - "--p2p-port=6000"
+      - "--persist=/data/chain.db"
+      - "--node-type=COMPUTE"
+      - "--bootstrap=bootstrap:6000"
+    ports:
+      - "5002:5000"
+      - "6002:6000"
+    volumes:
+      - compute_data:/data
+    environment:
+      - BORDER_NETWORK=testnet
+      - PYTHONUNBUFFERED=1
+    depends_on:
+      bootstrap:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  bootstrap_data:
+  relay_data:
+  compute_data:
