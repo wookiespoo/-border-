@@ -21,15 +21,16 @@ Service rewards (per block, on top of block reward)
   BC_PER_COMPUTE_HOUR    2.0   -- GPU compute
   BC_PER_GB_PER_DAY      0.01  -- storage kept per day
 
+Difficulty / block-time targeting
+----------------------------------
+  TARGET_BLOCK_TIME                600 s   (10 minutes)
+  DIFFICULTY_ADJUSTMENT_INTERVAL  2016 blocks  (~2 weeks)
+  MIN_DIFFICULTY                  1 MB
+  MAX_DIFFICULTY                  10 GB
+  RETARGET_CLAMP                  4×
+
 These constants are imported by block.py and chain.py so the whole
 stack uses a single source of truth.
-
-Utility functions
------------------
-  block_reward(height)       -> float    current coinbase for this height
-  cumulative_supply(height)  -> float    total BC issued through height
-  fee_sort_key(tx)           -> float    sort key for mempool ordering
-  validate_fee(tx)           -> bool     True if tx meets MIN_FEE_PER_TX
 """
 
 from __future__ import annotations
@@ -55,6 +56,25 @@ BC_PER_GB_PER_DAY: float     = 0.01
 # Fee market floor
 MIN_FEE_PER_TX: float        = 0.0001
 SATOSHI: float               = 0.00000001    # minimum unit
+
+# ---------------------------------------------------------------------------
+# Difficulty / block-time targeting
+# ---------------------------------------------------------------------------
+
+# Target 10-minute block intervals (same as Bitcoin)
+TARGET_BLOCK_TIME: float          = 600.0        # seconds
+
+# Retarget every 2016 blocks (~2 weeks at 10 min/block)
+DIFFICULTY_ADJUSTMENT_INTERVAL: int = 2016
+
+# Hard floor: 1 MB — even empty-ish testnet blocks must prove *something*
+MIN_DIFFICULTY: int = 1 * 1024 * 1024            # 1 MB
+
+# Hard ceiling: 10 GB — prevents runaway upward retargets
+MAX_DIFFICULTY: int = 10 * 1024 * 1024 * 1024    # 10 GB
+
+# Clamp factor: difficulty may not change by more than 4x per interval
+RETARGET_CLAMP: float = 4.0
 
 # ---------------------------------------------------------------------------
 # Block reward schedule
@@ -88,7 +108,6 @@ def cumulative_supply(height: int) -> float:
     ignoring service/fee bonuses.  Useful for checking MAX_SUPPLY headroom.
     """
     total = 0.0
-    era_start = 0
     current_reward = INITIAL_BLOCK_REWARD
     remaining = height + 1      # number of blocks to account for
 
@@ -124,3 +143,42 @@ def validate_fee(tx: "Transaction") -> bool:
 def supply_headroom(current_supply: float) -> float:
     """How many BC can still be minted before hitting MAX_SUPPLY."""
     return max(0.0, round(MAX_SUPPLY - current_supply, 8))
+
+
+# ---------------------------------------------------------------------------
+# Difficulty adjustment
+# ---------------------------------------------------------------------------
+
+def calculate_next_difficulty(
+    current_difficulty: int,
+    interval_start_ts: float,
+    interval_end_ts: float,
+) -> int:
+    """
+    Bitcoin-style difficulty retarget.
+
+    Computes how long the last DIFFICULTY_ADJUSTMENT_INTERVAL blocks actually
+    took, then scales current_difficulty proportionally to hit TARGET_BLOCK_TIME
+    per block.  Change is clamped to [1/RETARGET_CLAMP, RETARGET_CLAMP] and
+    the result is bounded by [MIN_DIFFICULTY, MAX_DIFFICULTY].
+
+    Args:
+        current_difficulty:  bytes threshold currently in use.
+        interval_start_ts:   timestamp of the block at the START of the window
+                             (block at height n - DIFFICULTY_ADJUSTMENT_INTERVAL).
+        interval_end_ts:     timestamp of the most-recently-added block.
+
+    Returns:
+        New difficulty (bytes threshold) as an int.
+    """
+    expected_time = DIFFICULTY_ADJUSTMENT_INTERVAL * TARGET_BLOCK_TIME
+    actual_time   = max(1.0, interval_end_ts - interval_start_ts)
+
+    # Clamp: no more than 4x adjustment in either direction
+    actual_time = max(actual_time, expected_time / RETARGET_CLAMP)
+    actual_time = min(actual_time, expected_time * RETARGET_CLAMP)
+
+    new_difficulty = int(current_difficulty * actual_time / expected_time)
+
+    # Enforce hard floor / ceiling
+    return max(MIN_DIFFICULTY, min(MAX_DIFFICULTY, new_difficulty))

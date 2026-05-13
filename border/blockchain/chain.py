@@ -13,7 +13,10 @@ from typing import Dict, List, Optional, Set, Tuple
 
 from . import block as _block_module
 from .block import Block, BandwidthProof, ComputeProofRecord, StorageProofRecord, BLOCK_REWARD, BC_PER_GB, BC_PER_COMPUTE_HOUR, BC_PER_GB_PER_DAY
-from .economics import validate_fee, fee_sort_key, MAX_SUPPLY
+from .economics import (
+    validate_fee, fee_sort_key, MAX_SUPPLY,
+    calculate_next_difficulty, DIFFICULTY_ADJUSTMENT_INTERVAL, MIN_DIFFICULTY,
+)
 from .transaction import Transaction
 
 logger = logging.getLogger("border.blockchain")
@@ -30,21 +33,66 @@ class BorderChain:
         self._spent_compute_proofs: Set[str] = set()
         self._spent_storage_proofs: Set[str] = set()
         self._persist_path = Path(persist_path) if persist_path else None
+        # Tracks pending outflows per address: address -> total BC reserved in mempool
+        self._mempool_reserved: Dict[str, float] = {}
+        # Balance cache: address -> confirmed balance (updated incrementally)
+        self._balance_cache: Dict[str, float] = {}
 
         if self._persist_path and self._persist_path.exists():
             self._load()
         else:
+            self._rebuild_balance_cache()
             logger.info("[Chain] Initialized with genesis block")
+
+    # -------------------------------------------------------------------
+    # Difficulty targeting
+    # -------------------------------------------------------------------
+
+    def _compute_next_difficulty(self) -> int:
+        """
+        Return the difficulty (min-bytes threshold) for the next block to be mined.
+
+        Retargets every DIFFICULTY_ADJUSTMENT_INTERVAL blocks using a Bitcoin-style
+        calculation: scale current difficulty by (actual_time / expected_time),
+        clamped to 4x in either direction.
+        """
+        next_index = len(self._chain)   # index of the block we're about to produce
+
+        # Carry forward previous difficulty between retarget windows
+        if next_index == 0 or next_index % DIFFICULTY_ADJUSTMENT_INTERVAL != 0:
+            return self.latest_block.difficulty
+
+        # Boundary: compute new difficulty from the last interval
+        start_block = self._chain[next_index - DIFFICULTY_ADJUSTMENT_INTERVAL]
+        end_block   = self.latest_block
+        new_diff = calculate_next_difficulty(
+            current_difficulty  = end_block.difficulty,
+            interval_start_ts   = start_block.timestamp,
+            interval_end_ts     = end_block.timestamp,
+        )
+        logger.info(
+            f"[Chain] Difficulty retarget at #{next_index}: "
+            f"{end_block.difficulty // (1024*1024)}MB -> {new_diff // (1024*1024)}MB"
+        )
+        return new_diff
+
+    # -------------------------------------------------------------------
+    # Block production
+    # -------------------------------------------------------------------
 
     def create_block(self, miner_address: str,
                      proofs: Optional[List[BandwidthProof]] = None,
                      transactions: Optional[List[Transaction]] = None) -> Optional[Block]:
+        next_difficulty = self._compute_next_difficulty()
         available_proofs = proofs or self._pending_proofs
         valid_proofs = [p for p in available_proofs if p.receipt_id not in self._spent_receipts]
         total_bytes = sum(p.bytes_forwarded for p in valid_proofs)
 
-        if total_bytes < _block_module.MIN_BYTES_PER_BLOCK:
-            logger.info(f"[Chain] Not enough bandwidth: {total_bytes/(1024*1024):.1f}MB / {_block_module.MIN_BYTES_PER_BLOCK/(1024*1024):.0f}MB")
+        if total_bytes < next_difficulty:
+            logger.info(
+                f"[Chain] Not enough bandwidth: "
+                f"{total_bytes/(1024*1024):.1f}MB / {next_difficulty/(1024*1024):.0f}MB required"
+            )
             return None
 
         valid_compute  = [p for p in self._pending_compute_proofs if p.proof_id not in self._spent_compute_proofs]
@@ -64,6 +112,7 @@ class BorderChain:
             compute_proofs=valid_compute,
             storage_proofs=valid_storage,
             transactions=pending_txs,
+            difficulty=next_difficulty,
         )
         block.finalize(current_supply=self.total_supply)
         return block
@@ -92,10 +141,23 @@ class BorderChain:
         self._pending_storage_proofs = [p for p in self._pending_storage_proofs if p.proof_id not in spent_sp]
 
         confirmed_ids = {tx.tx_id for tx in block.transactions}
+        # Release mempool reservations for confirmed transactions
+        for tx in block.transactions:
+            if tx.from_address in self._mempool_reserved:
+                cost = round(tx.amount + tx.fee, 8)
+                self._mempool_reserved[tx.from_address] = max(
+                    0.0, round(self._mempool_reserved[tx.from_address] - cost, 8)
+                )
+                if self._mempool_reserved[tx.from_address] == 0.0:
+                    del self._mempool_reserved[tx.from_address]
         self._mempool = [tx for tx in self._mempool if tx.tx_id not in confirmed_ids]
 
+        # Update balance cache for confirmed transactions
+        for tx in block.transactions:
+            self._apply_tx_to_cache(tx, sign=1)
+
         logger.info(
-            f"[Chain] ✓ Block #{block.index} | "
+            f"[Chain] Block #{block.index} | "
             f"bw={len(block.bandwidth_proofs)} | "
             f"compute={len(block.compute_proofs)} | "
             f"storage={len(block.storage_proofs)} | "
@@ -105,6 +167,10 @@ class BorderChain:
         if self._persist_path:
             self._save()
         return True, "accepted"
+
+    # -------------------------------------------------------------------
+    # Proof / transaction intake
+    # -------------------------------------------------------------------
 
     def add_proof(self, proof: BandwidthProof) -> bool:
         if proof.receipt_id in self._spent_receipts:
@@ -128,12 +194,11 @@ class BorderChain:
             return False
         if any(p.proof_id == proof.proof_id for p in self._pending_storage_proofs):
             return False
-        # Verify the node actually signed this proof — prevents forgery
         if not proof.verify_signature():
             logger.warning(f"[Chain] Storage proof rejected — invalid signature: {proof.proof_id}")
             return False
         self._pending_storage_proofs.append(proof)
-        logger.info(f"[Chain] Storage proof queued: {proof.proof_id} +{proof.reward_bc:.8f} BC → {proof.node_address[:16]}...")
+        logger.info(f"[Chain] Storage proof queued: {proof.proof_id} +{proof.reward_bc:.8f} BC -> {proof.node_address[:16]}...")
         return True
 
     def add_transaction(self, tx: Transaction) -> bool:
@@ -142,20 +207,45 @@ class BorderChain:
         if not validate_fee(tx):
             logger.warning(f"[Chain] TX {tx.tx_id} fee {tx.fee} below minimum")
             return False
-        if self.get_balance(tx.from_address) < tx.amount + tx.fee:
+        # Double-spend protection: confirmed balance minus already-pending outflows
+        confirmed   = self.get_balance(tx.from_address)
+        pending_out = self._mempool_reserved.get(tx.from_address, 0.0)
+        available   = round(confirmed - pending_out, 8)
+        cost        = round(tx.amount + tx.fee, 8)
+        if available < cost:
+            logger.warning(
+                f"[Chain] TX {tx.tx_id} insufficient funds: "
+                f"available={available} cost={cost} "
+                f"(confirmed={confirmed} pending_out={pending_out})"
+            )
             return False
         self._mempool.append(tx)
+        self._mempool_reserved[tx.from_address] = round(pending_out + cost, 8)
         return True
+
+    # -------------------------------------------------------------------
+    # Validation
+    # -------------------------------------------------------------------
 
     def _validate_block(self, block: Block) -> Tuple[bool, str]:
         if block.index != len(self._chain):
             return False, f"wrong index: expected {len(self._chain)}, got {block.index}"
         if block.previous_hash != self.latest_block.block_hash:
             return False, "previous_hash mismatch"
+        # Verify the difficulty stamped on this block matches what we compute
+        expected_diff = self._compute_next_difficulty()
+        if block.difficulty != expected_diff:
+            return False, (
+                f"difficulty mismatch: block has {block.difficulty}, "
+                f"expected {expected_diff}"
+            )
         if block.compute_hash() != block.block_hash:
             return False, "hash invalid"
-        if block.total_bytes < _block_module.MIN_BYTES_PER_BLOCK:
-            return False, f"insufficient bandwidth: {block.total_bytes} < {_block_module.MIN_BYTES_PER_BLOCK}"
+        if block.total_bytes < block.difficulty:
+            return False, (
+                f"insufficient bandwidth: {block.total_bytes} bytes "
+                f"< difficulty {block.difficulty}"
+            )
         for proof in block.bandwidth_proofs:
             if proof.receipt_id in self._spent_receipts:
                 return False, f"double-spend: receipt {proof.receipt_id}"
@@ -170,6 +260,7 @@ class BorderChain:
         return True, "valid"
 
     def validate_chain(self) -> Tuple[bool, str]:
+        """Full chain re-validation including per-block difficulty checks."""
         for i in range(1, len(self._chain)):
             block = self._chain[i]
             prev  = self._chain[i - 1]
@@ -177,19 +268,52 @@ class BorderChain:
                 return False, f"Block #{i}: broken link"
             if block.compute_hash() != block.block_hash:
                 return False, f"Block #{i}: hash invalid"
-            if block.total_bytes < _block_module.MIN_BYTES_PER_BLOCK:
-                return False, f"Block #{i}: insufficient bandwidth"
+            if block.total_bytes < block.difficulty:
+                return False, f"Block #{i}: insufficient bandwidth for difficulty"
+            # Recompute expected difficulty at this index
+            if i % DIFFICULTY_ADJUSTMENT_INTERVAL == 0:
+                start_block = self._chain[i - DIFFICULTY_ADJUSTMENT_INTERVAL]
+                expected = calculate_next_difficulty(
+                    current_difficulty=prev.difficulty,
+                    interval_start_ts=start_block.timestamp,
+                    interval_end_ts=prev.timestamp,
+                )
+            else:
+                expected = prev.difficulty
+            if block.difficulty != expected:
+                return False, f"Block #{i}: difficulty mismatch (got {block.difficulty}, expected {expected})"
         return True, "chain valid"
 
+    # -------------------------------------------------------------------
+    # Balance cache
+    # -------------------------------------------------------------------
+
     def get_balance(self, address: str) -> float:
-        balance = 0.0
+        """O(1) balance lookup via incrementally-maintained cache."""
+        return self._balance_cache.get(address, 0.0)
+
+    def _apply_tx_to_cache(self, tx, sign: int = 1) -> None:
+        """Update balance cache for one transaction.  sign=+1 to apply, -1 to undo."""
+        if tx.to_address:
+            self._balance_cache[tx.to_address] = round(
+                self._balance_cache.get(tx.to_address, 0.0) + sign * tx.amount, 8
+            )
+        if tx.from_address and tx.from_address != Transaction.COINBASE_ADDRESS:
+            self._balance_cache[tx.from_address] = round(
+                self._balance_cache.get(tx.from_address, 0.0)
+                - sign * (tx.amount + tx.fee), 8
+            )
+
+    def _rebuild_balance_cache(self) -> None:
+        """Rebuild the full balance cache from scratch (used on load / reorg)."""
+        self._balance_cache = {}
         for block in self._chain:
             for tx in block.transactions:
-                if tx.to_address == address:
-                    balance += tx.amount
-                if tx.from_address == address:
-                    balance -= (tx.amount + tx.fee)
-        return round(balance, 8)
+                self._apply_tx_to_cache(tx, sign=1)
+
+    # -------------------------------------------------------------------
+    # Chain replacement / reorg
+    # -------------------------------------------------------------------
 
     def replace_chain(self, new_chain: List[Block]) -> bool:
         if len(new_chain) <= len(self._chain):
@@ -214,6 +338,11 @@ class BorderChain:
                 self._spent_compute_proofs.add(p.proof_id)
             for p in block.storage_proofs:
                 self._spent_storage_proofs.add(p.proof_id)
+        self._rebuild_balance_cache()
+
+    # -------------------------------------------------------------------
+    # Properties
+    # -------------------------------------------------------------------
 
     @property
     def latest_block(self) -> Block:
@@ -230,6 +359,11 @@ class BorderChain:
             for tx in block.transactions
             if tx.from_address == Transaction.COINBASE_ADDRESS
         ), 8)
+
+    @property
+    def current_difficulty(self) -> int:
+        """Difficulty (min-bytes threshold) that will be used for the NEXT block."""
+        return self._compute_next_difficulty()
 
     @property
     def pending_bandwidth_mb(self) -> float:
@@ -263,7 +397,13 @@ class BorderChain:
             "bc_per_gb":                  BC_PER_GB,
             "bc_per_compute_hour":        BC_PER_COMPUTE_HOUR,
             "bc_per_gb_per_day":          BC_PER_GB_PER_DAY,
+            "current_difficulty_mb":      round(self.current_difficulty / (1024*1024), 2),
+            "latest_block_difficulty_mb": round(self.latest_block.difficulty / (1024*1024), 2),
         }
+
+    # -------------------------------------------------------------------
+    # Persistence
+    # -------------------------------------------------------------------
 
     def _save(self) -> None:
         if not self._persist_path:

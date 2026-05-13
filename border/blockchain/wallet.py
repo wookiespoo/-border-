@@ -182,3 +182,69 @@ class BorderWallet:
 
     def __repr__(self) -> str:
         return f"<BorderWallet {self._address}>"
+
+    # -- Mnemonic recovery -----------------------------------
+
+    @classmethod
+    def from_seed_bytes(cls, seed_bytes: bytes) -> "BorderWallet":
+        """
+        Construct a wallet deterministically from 32 raw seed bytes.
+        Used internally by mnemonic_to_wallet().
+        """
+        if len(seed_bytes) != 32:
+            raise ValueError(f"Expected 32 seed bytes, got {len(seed_bytes)}")
+        private_key = Ed25519PrivateKey.from_private_bytes(seed_bytes)
+        return cls(private_key)
+
+    @classmethod
+    def from_mnemonic(cls, phrase: str, passphrase: str = "") -> "BorderWallet":
+        """
+        Reconstruct a wallet from a BIP-39 mnemonic phrase.
+
+        Args:
+            phrase:     12 or 24-word BIP-39 mnemonic.
+            passphrase: Optional BIP-39 passphrase (default: empty string).
+
+        Returns:
+            BorderWallet identical to the one originally generated from this phrase.
+
+        Example:
+            wallet = BorderWallet.create_with_mnemonic()
+            phrase = wallet._mnemonic
+            # ... later, on a new device:
+            recovered = BorderWallet.from_mnemonic(phrase)
+            assert recovered.address == wallet.address
+        """
+        from .mnemonic import mnemonic_to_wallet
+        return mnemonic_to_wallet(phrase, passphrase)
+
+    @classmethod
+    def create_with_mnemonic(cls, strength: int = 128,
+                             passphrase: str = "") -> "BorderWallet":
+        """
+        Generate a new wallet backed by a BIP-39 mnemonic.
+
+        The mnemonic is stored on the returned wallet as ``wallet.mnemonic``.
+        Write it down — it's the only way to recover this wallet.
+
+        Args:
+            strength:   128 (12 words, default) or 256 (24 words).
+            passphrase: Optional BIP-39 passphrase.
+
+        Returns:
+            BorderWallet with a ``.mnemonic`` attribute set.
+        """
+        from .mnemonic import generate_mnemonic, mnemonic_to_wallet
+        phrase = generate_mnemonic(strength=strength)
+        wallet = mnemonic_to_wallet(phrase, passphrase)
+        wallet._mnemonic = phrase          # attach for immediate display
+        return wallet
+
+    @property
+    def mnemonic(self) -> Optional[str]:
+        """
+        The BIP-39 mnemonic for this wallet, if created via create_with_mnemonic().
+        Returns None for wallets created with create() or loaded from file.
+        Store this phrase in a safe place — it's your backup key.
+        """
+        return getattr(self, "_mnemonic", None)

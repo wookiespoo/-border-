@@ -24,6 +24,7 @@ from .economics import (
     validate_fee,
     fee_sort_key,
     MAX_SUPPLY,
+    MIN_DIFFICULTY,
 )
 
 
@@ -105,12 +106,10 @@ class StorageProofRecord:
     duration_seconds: float
     timestamp:        float
     reward_bc:        float = 0.0
-    # Ed25519 signature + public key so the chain can verify authenticity
     node_signature:   str   = ""
     node_public_key:  str   = ""
 
     def hash(self) -> str:
-        """Canonical hash over fields that a storage node commits to."""
         content = json.dumps({
             "proof_id":         self.proof_id,
             "node_address":     self.node_address,
@@ -122,7 +121,6 @@ class StorageProofRecord:
         return hashlib.sha256(content.encode()).hexdigest()
 
     def verify_signature(self) -> bool:
-        """Return True if node_signature is a valid Ed25519 sig over hash()."""
         if not self.node_signature or not self.node_public_key:
             return False
         from .wallet import BorderWallet
@@ -158,6 +156,9 @@ class Block:
     compute_proofs:   List[ComputeProofRecord] = field(default_factory=list)
     storage_proofs:   List[StorageProofRecord] = field(default_factory=list)
     block_hash:       str                      = ""
+    # Difficulty = minimum bytes of bandwidth proof required to produce this block.
+    # Adjusted every DIFFICULTY_ADJUSTMENT_INTERVAL blocks to target TARGET_BLOCK_TIME.
+    difficulty:       int                      = MIN_DIFFICULTY
 
     GENESIS_HASH = "0" * 64
 
@@ -171,6 +172,7 @@ class Block:
             transactions=[Transaction.coinbase(
                 to_address="BC_GENESIS_00000000000000000000000000000000",
                 reward=0.0, deterministic_id="genesis")],
+            difficulty=MIN_DIFFICULTY,
         )
         block.block_hash = block.compute_hash()
         return block
@@ -181,6 +183,7 @@ class Block:
             "timestamp":      self.timestamp,
             "previous_hash":  self.previous_hash,
             "miner_address":  self.miner_address,
+            "difficulty":     self.difficulty,
             "proofs":         sorted([p.receipt_id for p in self.bandwidth_proofs]),
             "compute_proofs": sorted([p.proof_id for p in self.compute_proofs]),
             "storage_proofs": sorted([p.proof_id for p in self.storage_proofs]),
@@ -201,7 +204,6 @@ class Block:
         total_storage = sum(p.reward_bc for p in self.storage_proofs)
         total_fees    = sum(tx.fee for tx in self.transactions
                            if tx.from_address != Transaction.COINBASE_ADDRESS)
-        # Sort user transactions by fee descending (fee market)
         user_txs  = sorted(
             [tx for tx in self.transactions if tx.from_address != Transaction.COINBASE_ADDRESS],
             key=lambda tx: -tx.fee,
@@ -209,7 +211,6 @@ class Block:
         self.transactions = user_txs
 
         raw_reward    = base_reward + total_bw + total_compute + total_storage + total_fees
-        # Clamp to remaining supply headroom
         headroom      = supply_headroom(current_supply)
         total_reward  = round(min(raw_reward, headroom), 8)
 
@@ -244,6 +245,7 @@ class Block:
             "timestamp":       self.timestamp,
             "previous_hash":   self.previous_hash,
             "miner_address":   self.miner_address,
+            "difficulty":      self.difficulty,
             "bandwidth_proofs":[p.to_dict() for p in self.bandwidth_proofs],
             "compute_proofs":  [p.to_dict() for p in self.compute_proofs],
             "storage_proofs":  [p.to_dict() for p in self.storage_proofs],
@@ -258,6 +260,7 @@ class Block:
             timestamp        = d["timestamp"],
             previous_hash    = d["previous_hash"],
             miner_address    = d["miner_address"],
+            difficulty       = d.get("difficulty", MIN_DIFFICULTY),
             bandwidth_proofs = [BandwidthProof.from_dict(p) for p in d.get("bandwidth_proofs", [])],
             transactions     = [Transaction.from_dict(tx) for tx in d.get("transactions", [])],
             compute_proofs   = [ComputeProofRecord.from_dict(p) for p in d.get("compute_proofs", [])],

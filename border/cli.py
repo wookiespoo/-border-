@@ -5,7 +5,9 @@ Commands
 --------
   border wallet new              Create a new wallet
   border wallet info             Show address + balance
-  border wallet send <to> <amt>  Send BC tokens
+  border wallet send <to> <amt>      Send BC tokens
+  border wallet new-mnemonic         Create wallet with BIP-39 mnemonic phrase
+  border wallet recover              Recover wallet from BIP-39 mnemonic
 
   border chain status            Show chain height + supply
   border chain balance <addr>    Check any address balance
@@ -299,6 +301,16 @@ def build_parser() -> argparse.ArgumentParser:
     wsend.add_argument("to");    wsend.add_argument("amount")
     wsend.add_argument("--fee",  default="0.001")
 
+    wnm = ws.add_parser("new-mnemonic", help="Create wallet with BIP-39 mnemonic")
+    wnm.add_argument("--force",      action="store_true")
+    wnm.add_argument("--24-words",   dest="words24", action="store_true")
+    wnm.add_argument("--passphrase", default="", help="Optional BIP-39 passphrase")
+
+    wrec = ws.add_parser("recover", help="Recover wallet from BIP-39 mnemonic")
+    wrec.add_argument("--mnemonic",   default="", help="Mnemonic phrase (or leave blank to prompt)")
+    wrec.add_argument("--passphrase", default="", help="Optional BIP-39 passphrase")
+    wrec.add_argument("--force",      action="store_true")
+
     # -- chain --
     chain = sub.add_parser("chain")
     cs = chain.add_subparsers(dest="cmd")
@@ -348,10 +360,70 @@ def build_parser() -> argparse.ArgumentParser:
 # Dispatch
 # ---------------------------------------------------------------------------
 
+
+def cmd_wallet_new_mnemonic(args, cfg):
+    """Create a new wallet backed by a BIP-39 mnemonic seed phrase."""
+    from .blockchain.wallet import BorderWallet
+    wp = Path(cfg["wallet"]).expanduser()
+    if wp.exists() and not getattr(args, "force", False):
+        print(f"Wallet already exists at {wp}. Use --force to overwrite.")
+        import sys; sys.exit(1)
+    wp.parent.mkdir(parents=True, exist_ok=True)
+    strength = 256 if getattr(args, "words24", False) else 128
+    w = BorderWallet.create_with_mnemonic(strength=strength,
+                                          passphrase=getattr(args, "passphrase", "") or "")
+    w.save(str(wp), password=args.password or None)
+    print("New wallet created with mnemonic recovery phrase")
+    print(f"  Address : {w.address}")
+    print(f"  Saved to: {wp}")
+    print()
+    print("  ╔══════════════════════════════════════════════════════╗")
+    print("  ║  WRITE DOWN YOUR RECOVERY PHRASE — DO NOT SHARE IT  ║")
+    print("  ╚══════════════════════════════════════════════════════╝")
+    words = w.mnemonic.split()
+    for i, word in enumerate(words, 1):
+        print(f"  {i:2d}. {word}")
+    print()
+    print("  Store this phrase somewhere safe.  It is the ONLY way to")
+    print("  recover your wallet if you lose the file or forget the password.")
+
+
+def cmd_wallet_recover(args, cfg):
+    """Recover a wallet from a BIP-39 mnemonic seed phrase."""
+    from .blockchain.wallet import BorderWallet
+    from .blockchain.mnemonic import validate_mnemonic
+    import sys
+
+    phrase = getattr(args, "mnemonic", None) or ""
+    if not phrase:
+        # Prompt interactively
+        print("Enter your recovery phrase (12 or 24 words, space-separated):")
+        phrase = input("> ").strip()
+
+    if not validate_mnemonic(phrase):
+        print("Error: invalid mnemonic phrase.")
+        sys.exit(1)
+
+    passphrase = getattr(args, "passphrase", "") or ""
+    w = BorderWallet.from_mnemonic(phrase, passphrase=passphrase)
+
+    wp = Path(cfg["wallet"]).expanduser()
+    if wp.exists() and not getattr(args, "force", False):
+        print(f"Wallet file already exists at {wp}. Use --force to overwrite.")
+        sys.exit(1)
+    wp.parent.mkdir(parents=True, exist_ok=True)
+    w.save(str(wp), password=args.password or None)
+    print("Wallet recovered successfully")
+    print(f"  Address : {w.address}")
+    print(f"  Saved to: {wp}")
+
+
 DISPATCH = {
     ("wallet",  "new"):      cmd_wallet_new,
     ("wallet",  "info"):     cmd_wallet_info,
-    ("wallet",  "send"):     cmd_wallet_send,
+    ("wallet",  "send"):          cmd_wallet_send,
+    ("wallet",  "new-mnemonic"):  cmd_wallet_new_mnemonic,
+    ("wallet",  "recover"):       cmd_wallet_recover,
     ("chain",   "status"):   cmd_chain_status,
     ("chain",   "balance"):  cmd_chain_balance,
     ("chain",   "block"):    cmd_chain_block,
