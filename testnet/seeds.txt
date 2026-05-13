@@ -1,0 +1,10 @@
+# Border Testnet Seed Nodes
+# Format: host:port
+# Add these as --peers arguments when starting a node, or set BORDER_PEERS env var.
+#
+# Example:
+#   border-node --peers seed1.testnet.border.network:9000 seed2.testnet.border.network:9000
+#   BORDER_PEERS=seed1.testnet.border.network:9000 border-node
+
+seed1.testnet.border.network:9000
+seed2.testnet.border.network:9000

@@ -1,8 +1,8 @@
 {
   "network": "border-testnet-1",
   "chain_id": 1337,
-  "genesis_timestamp": 1748649600.0,
-  "genesis_note": "Border Testnet Genesis — launched 2025",
+  "genesis_timestamp": 1778713717,
+  "genesis_note": "Border Testnet Genesis \u2014 launched 2026-05-13",
   "initial_allocation": [],
   "bootstrap_peers": [
     "seed1.testnet.border.network:9000",

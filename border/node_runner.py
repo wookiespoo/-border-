@@ -38,6 +38,7 @@ from .blockchain.wallet import BorderWallet
 # BorderChainNode available at border.blockchain.node if needed
 from .p2p.node import P2PNode
 from .p2p.server import create_p2p_blueprint
+from .faucet import Faucet, make_faucet_blueprint
 
 logging.basicConfig(
     level=logging.INFO,
@@ -96,6 +97,7 @@ class BorderNode:
         enable_dns: bool = False,
         enable_lora: bool = False,
         lora_freq_mhz: float = 868.0,
+        enable_faucet: bool = False,
     ):
         self.host = host
         self.port = port
@@ -146,9 +148,21 @@ class BorderNode:
         if enable_lora:
             self._init_lora()
 
+        self._faucet = None
+        if enable_faucet:
+            self._init_faucet()
+
     # -------------------------------------------------------------------
     # Core HTTP routes
     # -------------------------------------------------------------------
+
+    def _init_faucet(self) -> None:
+        """Mount the testnet BC faucet blueprint."""
+        self._faucet = Faucet(chain=self.chain, wallet=self.wallet)
+        self.app.register_blueprint(make_faucet_blueprint(self._faucet))
+        logger.info(
+            f"[Node] Faucet  addr={self.wallet.address[:16]}  drip=10.0 BC  cooldown=1h/IP"
+        )
 
     def _register_core_routes(self) -> None:
         app = self.app
@@ -419,6 +433,8 @@ def main(argv: Optional[List[str]] = None) -> None:
     parser.add_argument("--compute",  action="store_true", help="Enable compute market")
     parser.add_argument("--dns",      action="store_true", help="Enable DNS registry")
     parser.add_argument("--lora",     action="store_true", help="Enable LoRa broadcaster")
+    parser.add_argument("--faucet",    action="store_true",
+                        help="Enable testnet faucet — drips BC to any address")
     parser.add_argument("--lora-freq", type=float, default=868.0,
                         help="LoRa frequency in MHz (default 868.0 for EU; use 915.0 for US)")
     parser.add_argument("--verbose",  action="store_true")
@@ -443,6 +459,7 @@ def main(argv: Optional[List[str]] = None) -> None:
         enable_dns=args.dns,
         enable_lora=args.lora,
         lora_freq_mhz=args.lora_freq,
+        enable_faucet=args.faucet,
     )
     node.run()
 

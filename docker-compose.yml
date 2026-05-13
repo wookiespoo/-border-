@@ -1,5 +1,5 @@
 # Border Protocol — local testnet
-# Brings up 3 nodes: bootstrap + relay + compute
+# Brings up 3 nodes: bootstrap (with faucet) + relay + compute
 #
 # Usage:
 #   docker compose up --build          # start all nodes
@@ -7,14 +7,21 @@
 #   docker compose logs -f relay       # tail relay logs
 #   docker compose down -v             # stop + remove volumes
 #
-# Each node stores its chain DB and wallet in its own named volume.
+# REST endpoints after startup:
+#   Bootstrap  http://localhost:5000   (+ faucet at /faucet/drip)
+#   Relay      http://localhost:5001
+#   Compute    http://localhost:5002
+#
+# Drip testnet BC:
+#   curl -X POST http://localhost:5000/faucet/drip \
+#        -H "Content-Type: application/json" \
+#        -d '{"address":"BC_your_address_here"}'
 
 version: "3.9"
 
 services:
 
-  # ── Bootstrap node ────────────────────────────────────────────────────────
-  # First node to start; others peer to it.
+  # ── Bootstrap node (faucet enabled) ───────────────────────────────────────
   bootstrap:
     build: .
     container_name: border-bootstrap
@@ -24,9 +31,10 @@ services:
       - "--p2p-port=6000"
       - "--persist=/data/chain.db"
       - "--node-type=RELAY"
+      - "--faucet"
     ports:
-      - "5000:5000"   # REST API
-      - "6000:6000"   # P2P
+      - "5000:5000"
+      - "6000:6000"
     volumes:
       - bootstrap_data:/data
     environment:
@@ -50,7 +58,7 @@ services:
       - "--p2p-port=6000"
       - "--persist=/data/chain.db"
       - "--node-type=RELAY"
-      - "--bootstrap=bootstrap:6000"
+      - "--peers=bootstrap:6000"
     ports:
       - "5001:5000"
       - "6001:6000"
@@ -74,7 +82,8 @@ services:
       - "--p2p-port=6000"
       - "--persist=/data/chain.db"
       - "--node-type=COMPUTE"
-      - "--bootstrap=bootstrap:6000"
+      - "--compute"
+      - "--peers=bootstrap:6000"
     ports:
       - "5002:5000"
       - "6002:6000"
