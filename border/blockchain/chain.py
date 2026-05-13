@@ -6,6 +6,7 @@ Proof of Bandwidth + Proof of Compute + Proof of Storage.
 from __future__ import annotations
 
 import json
+from .store import ChainStore
 import logging
 import time
 from pathlib import Path
@@ -33,6 +34,15 @@ class BorderChain:
         self._spent_compute_proofs: Set[str] = set()
         self._spent_storage_proofs: Set[str] = set()
         self._persist_path = Path(persist_path) if persist_path else None
+        # SQLite store — used when persist_path ends with .db (or is a dir)
+        self._store: Optional[ChainStore] = None
+        if persist_path:
+            p = Path(persist_path)
+            if p.suffix == ".json":
+                pass  # legacy JSON path; _store stays None
+            else:
+                db_path = p if p.suffix == ".db" else p.with_suffix(".db")
+                self._store = ChainStore(db_path)
         # Tracks pending outflows per address: address -> total BC reserved in mempool
         self._mempool_reserved: Dict[str, float] = {}
         # Balance cache: address -> confirmed balance (updated incrementally)
@@ -42,7 +52,16 @@ class BorderChain:
         # Slash log: list of {"address", "amount", "reason", "timestamp"}
         self._slash_log: List[dict] = []
 
-        if self._persist_path and self._persist_path.exists():
+        if self._store is not None:
+            # SQLite persistence path
+            if self._store.count() > 0:
+                self._load()   # warm start from SQLite
+            else:
+                self._rebuild_balance_cache()
+                self._store.append_block(self._chain[0].to_dict())   # persist genesis
+                logger.info("[Chain] Initialized with genesis block (SQLite)")
+        elif self._persist_path and self._persist_path.exists():
+            # Legacy JSON path
             self._load()
         else:
             self._rebuild_balance_cache()
@@ -505,17 +524,28 @@ class BorderChain:
     # -------------------------------------------------------------------
 
     def _save(self) -> None:
-        if not self._persist_path:
-            return
-        self._persist_path.write_text(json.dumps({"chain": [b.to_dict() for b in self._chain]}))
+        if self._store is not None:
+            # SQLite: append only the latest block (O(1))
+            if self._chain:
+                self._store.append_block(self._chain[-1].to_dict())
+        elif self._persist_path:
+            # Legacy JSON fallback
+            self._persist_path.write_text(
+                json.dumps({"chain": [b.to_dict() for b in self._chain]})
+            )
 
     def _load(self) -> None:
-        if not self._persist_path or not self._persist_path.exists():
-            return
-        data = json.loads(self._persist_path.read_text())
-        self._chain = [Block.from_dict(b) for b in data["chain"]]
-        self._rebuild_spent_set()
-        logger.info(f"[Chain] Loaded: {len(self._chain)} blocks")
+        if self._store is not None:
+            blocks_raw = self._store.load_all()
+            if blocks_raw:
+                self._chain = [Block.from_dict(b) for b in blocks_raw]
+                self._rebuild_spent_set()
+                logger.info(f"[Chain] Loaded {len(self._chain)} blocks from SQLite")
+        elif self._persist_path and self._persist_path.exists():
+            data = json.loads(self._persist_path.read_text())
+            self._chain = [Block.from_dict(b) for b in data["chain"]]
+            self._rebuild_spent_set()
+            logger.info(f"[Chain] Loaded {len(self._chain)} blocks from JSON")
 
     # -------------------------------------------------------------------
     # P2P helpers
