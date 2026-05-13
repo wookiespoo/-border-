@@ -40,6 +40,7 @@ from .p2p.node import P2PNode
 from .p2p.server import create_p2p_blueprint
 from .faucet import Faucet, make_faucet_blueprint
 from .dashboard import make_dashboard_blueprint
+from .explorer import make_explorer_blueprint
 
 logging.basicConfig(
     level=logging.INFO,
@@ -133,6 +134,7 @@ class BorderNode:
         self._register_core_routes()
         self.app.register_blueprint(create_p2p_blueprint(self.p2p))
         self.app.register_blueprint(make_dashboard_blueprint())
+        self.app.register_blueprint(make_explorer_blueprint(self.chain))
 
         # Optional subsystems (mounted on sub-ports via threads)
         self._storage_node = None
