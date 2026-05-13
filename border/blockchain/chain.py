@@ -37,6 +37,10 @@ class BorderChain:
         self._mempool_reserved: Dict[str, float] = {}
         # Balance cache: address -> confirmed balance (updated incrementally)
         self._balance_cache: Dict[str, float] = {}
+        # Staking: address -> {"amount": float, "role": str, "locked_at": float}
+        self._stakes: Dict[str, dict] = {}
+        # Slash log: list of {"address", "amount", "reason", "timestamp"}
+        self._slash_log: List[dict] = []
 
         if self._persist_path and self._persist_path.exists():
             self._load()
@@ -181,9 +185,17 @@ class BorderChain:
         return True
 
     def add_compute_proof(self, proof: ComputeProofRecord) -> bool:
+        """Accept a compute proof. Rejects if worker has not staked the minimum."""
         if proof.proof_id in self._spent_compute_proofs:
             return False
         if any(p.proof_id == proof.proof_id for p in self._pending_compute_proofs):
+            return False
+        if not self.has_minimum_stake(proof.worker_address, "compute"):
+            logger.warning(
+                f"[Chain] Compute proof rejected — insufficient stake: "
+                f"{proof.worker_address[:20]}... "
+                f"staked={self.get_staked(proof.worker_address):.2f} BC"
+            )
             return False
         self._pending_compute_proofs.append(proof)
         logger.info(f"[Chain] Compute proof queued: {proof.proof_id} +{proof.compute_reward_bc:.6f} BC")
@@ -399,7 +411,94 @@ class BorderChain:
             "bc_per_gb_per_day":          BC_PER_GB_PER_DAY,
             "current_difficulty_mb":      round(self.current_difficulty / (1024*1024), 2),
             "latest_block_difficulty_mb": round(self.latest_block.difficulty / (1024*1024), 2),
+            "total_staked_bc":            self.total_staked,
+            "active_stakers":             len(self._stakes),
+            "slash_events":               len(self._slash_log),
         }
+
+
+    # -------------------------------------------------------------------
+    # Staking / slashing
+    # -------------------------------------------------------------------
+
+    # Minimum BC required per role
+    STAKE_MINIMUMS = {
+        "relay":   1.0,
+        "compute": 1.0,
+        "storage": 2.0,
+        "infer":   5.0,
+        "render":  10.0,
+    }
+
+    def stake(self, address: str, amount: float, role: str):
+        """Lock BC as collateral for a service role."""
+        role = role.lower()
+        minimum = self.STAKE_MINIMUMS.get(role)
+        if minimum is None:
+            return False, f"Unknown role: {role}"
+        if amount < minimum:
+            return False, f"Stake too low for {role}: need >={minimum} BC, got {amount}"
+        available = round(self.get_balance(address) - self.get_staked(address), 8)
+        if available < amount:
+            return False, f"Insufficient available balance: have {available:.8f} BC, need {amount:.8f}"
+        existing = self._stakes.get(address)
+        if existing:
+            new_amount = round(existing["amount"] + amount, 8)
+            self._stakes[address] = {"amount": new_amount, "role": role, "locked_at": existing["locked_at"]}
+        else:
+            self._stakes[address] = {"amount": round(amount, 8), "role": role, "locked_at": time.time()}
+        logger.info(f"[Chain] Staked {amount:.8f} BC for {address[:20]}... role={role}")
+        return True, "staked"
+
+    def unstake(self, address: str):
+        """Release a node's entire stake back to spendable balance."""
+        if address not in self._stakes:
+            return False, "No stake found"
+        entry = self._stakes.pop(address)
+        logger.info(f"[Chain] Unstaked {entry['amount']:.8f} BC for {address[:20]}...")
+        return True, f"released {entry['amount']:.8f} BC"
+
+    def slash(self, address: str, amount: float, reason: str = ""):
+        """Slash a portion of a node's stake as a penalty for misbehavior."""
+        entry = self._stakes.get(address)
+        if not entry:
+            return False, "Address has no stake to slash"
+        slash_amount = round(min(amount, entry["amount"]), 8)
+        entry["amount"] = round(entry["amount"] - slash_amount, 8)
+        if entry["amount"] <= 0.0:
+            del self._stakes[address]
+            logger.warning(f"[Chain] FULL SLASH {address[:20]}... -{slash_amount:.8f} BC ({reason})")
+        else:
+            self._stakes[address] = entry
+            logger.warning(
+                f"[Chain] SLASH {address[:20]}... -{slash_amount:.8f} BC ({reason}) "
+                f"remaining={entry['amount']:.8f}"
+            )
+        self._slash_log.append({
+            "address":   address,
+            "amount":    slash_amount,
+            "reason":    reason,
+            "timestamp": time.time(),
+        })
+        return True, f"slashed {slash_amount:.8f} BC"
+
+    def get_staked(self, address: str) -> float:
+        return self._stakes.get(address, {}).get("amount", 0.0)
+
+    def get_stake_info(self, address: str):
+        return self._stakes.get(address)
+
+    def has_minimum_stake(self, address: str, role: str) -> bool:
+        minimum = self.STAKE_MINIMUMS.get(role.lower(), 0.0)
+        return self.get_staked(address) >= minimum
+
+    @property
+    def slash_log(self):
+        return list(self._slash_log)
+
+    @property
+    def total_staked(self) -> float:
+        return round(sum(e["amount"] for e in self._stakes.values()), 8)
 
     # -------------------------------------------------------------------
     # Persistence
