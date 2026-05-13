@@ -162,8 +162,13 @@ class StorageClient:
             if ciphertext is None:
                 raise RuntimeError(f"Could not retrieve chunk {chunk_id[:16]}...")
 
-            # Decrypt
-            plaintext = bytes(a ^ b for a, b in zip(ciphertext, key))
+            # Decrypt (ChaCha20-Poly1305: nonce || ct+tag)
+            from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
+            from border.storage.chunk import NONCE_SIZE
+            nonce_  = ciphertext[:NONCE_SIZE]
+            ct_     = ciphertext[NONCE_SIZE:]
+            cipher_ = ChaCha20Poly1305(key)
+            plaintext = cipher_.decrypt(nonce_, ct_, chunk_id.encode())
 
             # Verify
             if hashlib.sha256(plaintext).hexdigest() != chunk_id:
@@ -171,7 +176,8 @@ class StorageClient:
 
             chunk_data.append((index, plaintext))
 
-        result = self.chunker.reassemble(chunk_data)
+        chunk_data.sort(key=lambda x: x[0])
+        result = b"".join(p for _, p in chunk_data)
 
         # Verify full file
         if manifest.content_hash:

@@ -212,7 +212,8 @@ async def main():
                     response_hash=response,
                     expected_hash=expected,
                 )
-                proof.node_signature = node.wallet.sign(proof.hash().encode())
+                proof.node_public_key = node.wallet.public_key_b64
+                proof.node_signature  = node.wallet.sign(proof.hash().encode())
 
                 bc_earned = proof.reward_bc()
                 ok(f"  {node.node_id} passed | chunk {chunk.chunk_id[:16]}... | +{bc_earned:.8f} BC")
@@ -229,6 +230,8 @@ async def main():
                     duration_seconds=proof.duration_seconds,
                     timestamp=proof.timestamp,
                     reward_bc=bc_earned,
+                    node_signature=proof.node_signature,
+                    node_public_key=proof.node_public_key,
                 )
                 storage_proofs_for_chain.append(chain_record)
             else:
@@ -297,18 +300,23 @@ async def main():
     h("Step 9: Download file + verify integrity")
 
     # Reconstruct from the first node (could use any)
+    from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
+    from border.storage.chunk import NONCE_SIZE
     chunk_data = []
-    for entry in manifest.chunk_entries:
-        chunk_id = entry["chunk_id"]
-        key      = bytes.fromhex(entry["key"])
-        # Fetch from node 1
+    for entry in sorted(manifest.chunk_entries, key=lambda e: e["index"]):
+        chunk_id   = entry["chunk_id"]
+        key        = bytes.fromhex(entry["key"])
         ciphertext = nodes[0].retrieve_chunk(chunk_id)
         assert ciphertext is not None, f"Missing chunk {chunk_id}"
-        plaintext = bytes(a ^ b for a, b in zip(ciphertext, key))
+        # ChaCha20-Poly1305: ciphertext = nonce(12B) || ct+tag
+        nonce   = ciphertext[:NONCE_SIZE]
+        ct      = ciphertext[NONCE_SIZE:]
+        cipher  = ChaCha20Poly1305(key)
+        plaintext = cipher.decrypt(nonce, ct, chunk_id.encode())
         assert hashlib.sha256(plaintext).hexdigest() == chunk_id, "Chunk integrity fail!"
-        chunk_data.append((entry["index"], plaintext))
+        chunk_data.append(plaintext)
 
-    reassembled = chunker.reassemble(chunk_data)
+    reassembled = b"".join(chunk_data)
     actual_hash = hashlib.sha256(reassembled).hexdigest()
 
     ok(f"Downloaded: {len(reassembled)/(1024*1024):.1f}MB")

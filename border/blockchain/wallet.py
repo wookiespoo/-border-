@@ -3,6 +3,24 @@ BorderCoin Wallet
 Ed25519 keypair. Your identity on the BorderCoin network.
 Your address = hash of your public key.
 Nobody can fake it. Nobody can take it.
+
+Key storage:
+  wallet.save(path)              -- unencrypted (dev/testing only)
+  wallet.save(path, password)    -- ChaCha20-Poly1305 encrypted via scrypt KDF
+  BorderWallet.load(path)        -- unencrypted load
+  BorderWallet.load(path, password) -- decrypts with password
+
+Encrypted wallet format (JSON):
+  {
+    "address":     "BC_...",
+    "public_key":  "<base64>",
+    "encrypted":   true,
+    "kdf":         "scrypt",
+    "salt":        "<hex 32B>",
+    "nonce":       "<hex 12B>",
+    "ciphertext":  "<base64>",   # ChaCha20-Poly1305 of raw private key bytes
+    "warning":     "..."
+  }
 """
 
 from __future__ import annotations
@@ -10,6 +28,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -18,35 +37,48 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PrivateKey,
     Ed25519PublicKey,
 )
+from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
+from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
+
+# scrypt parameters -- tuned for ~100ms on modern hardware
+_SCRYPT_N = 2 ** 15   # 32768
+_SCRYPT_R = 8
+_SCRYPT_P = 1
+
+
+def _derive_key(password: str, salt: bytes) -> bytes:
+    """Derive a 32-byte key from password + salt using scrypt."""
+    kdf = Scrypt(salt=salt, length=32, n=_SCRYPT_N, r=_SCRYPT_R, p=_SCRYPT_P)
+    return kdf.derive(password.encode())
 
 
 class BorderWallet:
     """
     A BorderCoin wallet.
 
-    Your address is derived from your public key — nobody assigned it to you,
+    Your address is derived from your public key -- nobody assigned it to you,
     you generated it yourself. No bank. No signup. No permission needed.
 
     Usage:
         wallet = BorderWallet.create()
-        wallet.save("my_wallet.json")
+        wallet.save("my_wallet.json", password="hunter2")   # encrypted
 
         # Later
-        wallet = BorderWallet.load("my_wallet.json")
-        print(wallet.address)  # PC_a3f8c21d...
+        wallet = BorderWallet.load("my_wallet.json", password="hunter2")
+        print(wallet.address)  # BC_a3f8c21d...
     """
 
     ADDRESS_PREFIX = "BC_"
 
     def __init__(self, private_key: Ed25519PrivateKey):
         self._private_key = private_key
-        self._public_key = private_key.public_key()
+        self._public_key  = private_key.public_key()
 
         pub_bytes = self._public_key.public_bytes(
             encoding=serialization.Encoding.Raw,
             format=serialization.PublicFormat.Raw,
         )
-        self._address = self.ADDRESS_PREFIX + hashlib.sha256(pub_bytes).hexdigest()[:32]
+        self._address        = self.ADDRESS_PREFIX + hashlib.sha256(pub_bytes).hexdigest()[:32]
         self._public_key_b64 = base64.b64encode(pub_bytes).decode()
 
     @classmethod
@@ -55,45 +87,73 @@ class BorderWallet:
         return cls(Ed25519PrivateKey.generate())
 
     @classmethod
-    def load(cls, path: str) -> "BorderWallet":
-        """Load wallet from JSON file."""
+    def load(cls, path: str, password: Optional[str] = None) -> "BorderWallet":
+        """
+        Load wallet from JSON file.
+        Pass password= if the wallet was saved with encryption.
+        """
         data = json.loads(Path(path).read_text())
-        priv_bytes = base64.b64decode(data["private_key"])
+
+        if data.get("encrypted"):
+            if password is None:
+                raise ValueError("This wallet is encrypted -- provide a password to load it.")
+            salt       = bytes.fromhex(data["salt"])
+            nonce      = bytes.fromhex(data["nonce"])
+            ciphertext = base64.b64decode(data["ciphertext"])
+            key        = _derive_key(password, salt)
+            cipher     = ChaCha20Poly1305(key)
+            # AAD = address bytes -- binds decryption to this specific wallet
+            priv_bytes = cipher.decrypt(nonce, ciphertext, data["address"].encode())
+        else:
+            priv_bytes = base64.b64decode(data["private_key"])
+
         private_key = Ed25519PrivateKey.from_private_bytes(priv_bytes)
         return cls(private_key)
 
-    def save(self, path: str) -> None:
-        """Save wallet to JSON file. Keep this file secret."""
+    def save(self, path: str, password: Optional[str] = None) -> None:
+        """
+        Save wallet to JSON.
+        If password is provided the private key is encrypted with ChaCha20-Poly1305
+        derived via scrypt. Without a password it's stored in plaintext (dev only).
+        """
+        pub_bytes  = self._public_key.public_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PublicFormat.Raw,
+        )
         priv_bytes = self._private_key.private_bytes(
             encoding=serialization.Encoding.Raw,
             format=serialization.PrivateFormat.Raw,
             encryption_algorithm=serialization.NoEncryption(),
         )
-        data = {
-            "address": self._address,
-            "public_key": self._public_key_b64,
-            "private_key": base64.b64encode(priv_bytes).decode(),
-            "warning": "KEEP THIS FILE SECRET. Your private key is inside.",
-        }
+
+        if password:
+            salt   = os.urandom(32)
+            nonce  = os.urandom(12)
+            key    = _derive_key(password, salt)
+            cipher = ChaCha20Poly1305(key)
+            ct     = cipher.encrypt(nonce, priv_bytes, self._address.encode())
+            data   = {
+                "address":    self._address,
+                "public_key": self._public_key_b64,
+                "encrypted":  True,
+                "kdf":        "scrypt",
+                "salt":       salt.hex(),
+                "nonce":      nonce.hex(),
+                "ciphertext": base64.b64encode(ct).decode(),
+                "warning":    "This file is encrypted. Keep it safe.",
+            }
+        else:
+            data = {
+                "address":     self._address,
+                "public_key":  self._public_key_b64,
+                "private_key": base64.b64encode(priv_bytes).decode(),
+                "encrypted":   False,
+                "warning":     "UNENCRYPTED -- do not commit to version control!",
+            }
+
         Path(path).write_text(json.dumps(data, indent=2))
 
-    def sign(self, message: bytes) -> str:
-        """Sign a message with your private key. Returns base64 signature."""
-        sig = self._private_key.sign(message)
-        return base64.b64encode(sig).decode()
-
-    @staticmethod
-    def verify(public_key_b64: str, message: bytes, signature_b64: str) -> bool:
-        """Verify a signature against a public key."""
-        try:
-            pub_bytes = base64.b64decode(public_key_b64)
-            pub_key = Ed25519PublicKey.from_public_bytes(pub_bytes)
-            sig = base64.b64decode(signature_b64)
-            pub_key.verify(sig, message)
-            return True
-        except Exception:
-            return False
-
+    # -- Properties ------------------------------------------
     @property
     def address(self) -> str:
         return self._address
@@ -102,5 +162,23 @@ class BorderWallet:
     def public_key_b64(self) -> str:
         return self._public_key_b64
 
+    # -- Signing ---------------------------------------------
+    def sign(self, data: bytes) -> str:
+        """Sign arbitrary bytes. Returns base64-encoded Ed25519 signature."""
+        sig = self._private_key.sign(data)
+        return base64.b64encode(sig).decode()
+
+    @staticmethod
+    def verify(public_key_b64: str, data: bytes, signature_b64: str) -> bool:
+        """Verify an Ed25519 signature. Returns True if valid."""
+        try:
+            pub_bytes = base64.b64decode(public_key_b64)
+            pub_key   = Ed25519PublicKey.from_public_bytes(pub_bytes)
+            sig_bytes = base64.b64decode(signature_b64)
+            pub_key.verify(sig_bytes, data)
+            return True
+        except Exception:
+            return False
+
     def __repr__(self) -> str:
-        return f"BorderWallet(address={self._address})"
+        return f"<BorderWallet {self._address}>"

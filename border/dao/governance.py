@@ -57,7 +57,15 @@ class GovernanceEngine:
         return True, "submitted"
 
     # ── Vote ──────────────────────────────────────────────
-    def cast_vote(self, vote: Vote) -> Tuple[bool, str]:
+    def cast_vote(self, vote: Vote, voter_public_key: str = "") -> Tuple[bool, str]:
+        """Cast a vote. voter_public_key required to verify the vote signature."""
+        # Verify signature if a public key is provided
+        if voter_public_key:
+            if not vote.verify_signature(voter_public_key):
+                return False, "Invalid or missing vote signature"
+        elif vote.signature:
+            # Signature present but no key supplied — still accept for backwards compat
+            pass
         proposal = self._proposals.get(vote.proposal_id)
         if proposal is None:
             return False, "Proposal not found"

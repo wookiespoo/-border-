@@ -105,6 +105,11 @@ class ComputeMarket:
         if proof.job_id in self._proofs:
             return False, "Proof already submitted for this job", 0.0
 
+        # Verify worker signature when public key is present
+        if proof.worker_public_key:
+            if not proof.verify_signature():
+                return False, "Invalid worker signature", 0.0
+
         # Verify proof hashes match job input
         if proof.input_hash != job.input_hash():
             return False, "input_hash mismatch — proof does not match job", 0.0

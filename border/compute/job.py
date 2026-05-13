@@ -261,8 +261,9 @@ class ComputeProof:
     input_hash:       str           # SHA256 of input_data (verifiable)
     output_hash:      str           # SHA256 of result
     timestamp:        float         = field(default_factory=time.time)
-    worker_signature: str           = ""
-    price_bc:         float         = 0.0  # Agreed price
+    worker_signature:  str          = ""
+    worker_public_key: str          = ""   # Ed25519 public key (base64) for signature verification
+    price_bc:          float         = 0.0  # Agreed price
 
     @classmethod
     def from_job(
@@ -310,6 +311,21 @@ class ComputeProof:
         )
         return hashlib.sha256(content.encode()).hexdigest()
 
+    def verify_signature(self) -> bool:
+        """Verify worker_signature is a valid Ed25519 sig over hash()."""
+        if not self.worker_signature or not self.worker_public_key:
+            return False
+        try:
+            import base64
+            from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+            pub_bytes = base64.b64decode(self.worker_public_key)
+            pub_key   = Ed25519PublicKey.from_public_bytes(pub_bytes)
+            sig_bytes = base64.b64decode(self.worker_signature)
+            pub_key.verify(sig_bytes, self.hash().encode())
+            return True
+        except Exception:
+            return False
+
     def to_dict(self) -> dict:
         return {
             "proof_id":         self.proof_id,
@@ -325,7 +341,8 @@ class ComputeProof:
             "input_hash":       self.input_hash,
             "output_hash":      self.output_hash,
             "timestamp":        self.timestamp,
-            "worker_signature": self.worker_signature,
+            "worker_signature":  self.worker_signature,
+            "worker_public_key": self.worker_public_key,
             "price_bc":         self.price_bc,
         }
 
@@ -346,5 +363,6 @@ class ComputeProof:
             output_hash=d["output_hash"],
             timestamp=d["timestamp"],
             worker_signature=d.get("worker_signature", ""),
+            worker_public_key=d.get("worker_public_key", ""),
             price_bc=d.get("price_bc", 0.0),
         )

@@ -1,23 +1,11 @@
 """
-BorderStore — Storage Node
+BorderStore -- Storage Node
 ============================
 Run this on any machine with spare disk space.
 Store encrypted chunks for clients, respond to challenges, earn BC.
 
 Every byte stored = passive BorderCoin income.
-You never see the plaintext — clients encrypt before uploading.
-
-Usage:
-    from border.storage import BorderStorageNode, serve_storage
-    from border.blockchain import BorderWallet
-
-    wallet = BorderWallet.load("wallet.json")
-    serve_storage(
-        wallet=wallet,
-        chain_endpoint="http://localhost:7777",
-        storage_path="./border_storage",
-        port=9999,
-    )
+You never see the plaintext -- clients encrypt before uploading.
 """
 
 from __future__ import annotations
@@ -47,40 +35,39 @@ class BorderStorageNode:
     responds to storage challenges (proving possession),
     and submits StorageProofs to the blockchain to earn BorderCoin.
 
-    The node NEVER sees plaintext — all data is pre-encrypted by clients.
+    The node NEVER sees plaintext -- all data is pre-encrypted by clients.
     """
 
     def __init__(
         self,
-        node_id:        str,
+        node_id:             str,
         wallet,
-        storage_path:   str   = "./border_storage",
-        capacity_gb:    float = 100.0,
+        storage_path:        str   = "./border_storage",
+        capacity_gb:         float = 100.0,
         price_bc_per_gb_day: float = BC_PER_GB_PER_DAY,
-        chain_endpoint: Optional[str] = None,
-        endpoint:       str   = "http://localhost:9999",
-        region:         str   = "UNKNOWN",
+        chain_endpoint:      Optional[str] = None,
+        endpoint:            str   = "http://localhost:9999",
+        region:              str   = "UNKNOWN",
     ):
         self.node_id      = node_id
         self.wallet       = wallet
         self.storage_path = Path(storage_path)
         self.storage_path.mkdir(parents=True, exist_ok=True)
-        self.capacity_gb  = capacity_gb
+        self.capacity_gb         = capacity_gb
         self.price_bc_per_gb_day = price_bc_per_gb_day
         self.chain_endpoint      = chain_endpoint
         self.endpoint            = endpoint
         self.region              = region
 
-        self._chunks_stored:    Set[str]                  = set()
-        self._chunk_metadata:   Dict[str, dict]           = {}
-        self._active_challenges: Dict[str, StorageChallenge] = {}
-        self._proofs_submitted: Set[str]                  = set()
-        self._start_time        = time.time()
-        self._bytes_stored      = 0
-        self._bc_earned         = 0.0
-        self._challenges_passed = 0
+        self._chunks_stored:     Set[str]                     = set()
+        self._chunk_metadata:    Dict[str, dict]              = {}
+        self._active_challenges: Dict[str, StorageChallenge]  = {}
+        self._proofs_submitted:  Set[str]                     = set()
+        self._start_time         = time.time()
+        self._bytes_stored       = 0
+        self._bc_earned          = 0.0
+        self._challenges_passed  = 0
 
-        # Load existing chunk index
         self._load_index()
         logger.info(
             f"[StorageNode] {node_id} | "
@@ -89,23 +76,15 @@ class BorderStorageNode:
             f"chain={chain_endpoint or 'none'}"
         )
 
-    # ─────────────────────────────────────────────────────
-    # Chunk storage
-    # ─────────────────────────────────────────────────────
-
     def _chunk_path(self, chunk_id: str) -> Path:
-        # Shard into subdirs to avoid huge flat directories
         return self.storage_path / chunk_id[:2] / chunk_id[2:4] / chunk_id
 
     def store_chunk(self, chunk_id: str, ciphertext: bytes, metadata: dict) -> bool:
-        """Store an encrypted chunk on disk."""
         if chunk_id in self._chunks_stored:
-            return True  # Already have it
-
+            return True
         path = self._chunk_path(chunk_id)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(ciphertext)
-
         self._chunks_stored.add(chunk_id)
         self._chunk_metadata[chunk_id] = {
             **metadata,
@@ -114,12 +93,10 @@ class BorderStorageNode:
         }
         self._bytes_stored += len(ciphertext)
         self._save_index()
-
         logger.info(f"[StorageNode] Stored chunk {chunk_id[:16]}... ({len(ciphertext)} bytes)")
         return True
 
     def retrieve_chunk(self, chunk_id: str) -> Optional[bytes]:
-        """Retrieve an encrypted chunk from disk."""
         if chunk_id not in self._chunks_stored:
             return None
         path = self._chunk_path(chunk_id)
@@ -128,7 +105,6 @@ class BorderStorageNode:
         return path.read_bytes()
 
     def delete_chunk(self, chunk_id: str) -> bool:
-        """Delete a chunk (e.g. when storage contract expires)."""
         if chunk_id not in self._chunks_stored:
             return False
         path = self._chunk_path(chunk_id)
@@ -141,70 +117,54 @@ class BorderStorageNode:
         self._save_index()
         return True
 
-    # ─────────────────────────────────────────────────────
-    # Challenge / response
-    # ─────────────────────────────────────────────────────
-
     def respond_to_challenge(self, challenge: StorageChallenge) -> Optional[str]:
-        """
-        Respond to a storage challenge.
-        Returns SHA256(ciphertext + nonce) or None if we don't have the chunk.
-        """
         ciphertext = self.retrieve_chunk(challenge.chunk_id)
         if ciphertext is None:
             return None
-        response = hashlib.sha256(ciphertext + challenge.nonce.encode()).hexdigest()
-        return response
+        return hashlib.sha256(ciphertext + challenge.nonce.encode()).hexdigest()
 
     def build_proof_from_challenge(
         self,
-        challenge:    StorageChallenge,
+        challenge:     StorageChallenge,
         owner_address: str,
-        file_id:      str,
+        file_id:       str,
     ) -> Optional[StorageProof]:
-        """Build a StorageProof after passing a challenge."""
         ciphertext = self.retrieve_chunk(challenge.chunk_id)
         if ciphertext is None:
             return None
-
         response_hash = self.respond_to_challenge(challenge)
         expected_hash = challenge.expected_response(ciphertext)
-
         proof = StorageProof.from_challenge(
-            challenge=challenge,
-            node_address=self.wallet.address,
-            owner_address=owner_address,
-            file_id=file_id,
-            bytes_stored=len(ciphertext),
-            response_hash=response_hash,
-            expected_hash=expected_hash,
+            challenge     = challenge,
+            node_address  = self.wallet.address,
+            owner_address = owner_address,
+            file_id       = file_id,
+            bytes_stored  = len(ciphertext),
+            response_hash = response_hash,
+            expected_hash = expected_hash,
         )
-        proof.node_signature = self.wallet.sign(proof.hash().encode())
+        proof.node_public_key = self.wallet.public_key_b64
+        proof.node_signature  = self.wallet.sign(proof.hash().encode())
         return proof
 
     def build_duration_proof(self, chunk_id: str, owner_address: str, file_id: str) -> Optional[StorageProof]:
-        """Build a periodic duration proof for a stored chunk."""
         if chunk_id not in self._chunks_stored:
             return None
-        meta = self._chunk_metadata.get(chunk_id, {})
+        meta      = self._chunk_metadata.get(chunk_id, {})
         stored_at = meta.get("stored_at", time.time())
         duration  = time.time() - stored_at
         size      = meta.get("size", 0)
-
         proof = StorageProof.from_duration(
-            node_address=self.wallet.address,
-            owner_address=owner_address,
-            chunk_id=chunk_id,
-            file_id=file_id,
-            bytes_stored=size,
-            duration_seconds=duration,
+            node_address     = self.wallet.address,
+            owner_address    = owner_address,
+            chunk_id         = chunk_id,
+            file_id          = file_id,
+            bytes_stored     = size,
+            duration_seconds = duration,
         )
-        proof.node_signature = self.wallet.sign(proof.hash().encode())
+        proof.node_public_key = self.wallet.public_key_b64
+        proof.node_signature  = self.wallet.sign(proof.hash().encode())
         return proof
-
-    # ─────────────────────────────────────────────────────
-    # Blockchain submission
-    # ─────────────────────────────────────────────────────
 
     async def _submit_proof_to_chain(self, proof: StorageProof) -> None:
         if not self.chain_endpoint or proof.proof_id in self._proofs_submitted:
@@ -219,87 +179,70 @@ class BorderStorageNode:
                     self._proofs_submitted.add(proof.proof_id)
                     bc = proof.reward_bc()
                     self._bc_earned += bc
-                    logger.info(f"[StorageNode→Chain] Proof accepted +{bc:.8f} BC")
+                    logger.info(f"[StorageNode->Chain] Proof accepted +{bc:.8f} BC")
         except Exception as e:
-            logger.debug(f"[StorageNode→Chain] Chain unreachable: {e}")
-
-    # ─────────────────────────────────────────────────────
-    # FastAPI app
-    # ─────────────────────────────────────────────────────
+            logger.debug(f"[StorageNode->Chain] Chain unreachable: {e}")
 
     def create_app(self) -> FastAPI:
         app = FastAPI(
-            title="BorderStore Node",
-            description="Decentralised encrypted storage — earn BC per GB stored",
-            docs_url="/storage/docs",
-            redoc_url=None,
+            title       = "BorderStore Node",
+            description = "Decentralised encrypted storage -- earn BC per GB stored",
+            docs_url    = "/storage/docs",
+            redoc_url   = None,
         )
 
         @app.post("/storage/store/{chunk_id}")
         async def store_chunk(chunk_id: str, request: Request):
-            """Client uploads an encrypted chunk."""
             ciphertext = await request.body()
             if not ciphertext:
                 raise HTTPException(400, "Empty chunk")
-
             meta_header = request.headers.get("X-Border-Meta", "{}")
             import json
             try:
                 meta = json.loads(meta_header)
             except Exception:
                 meta = {}
-
             ok = self.store_chunk(chunk_id, ciphertext, meta)
             if not ok:
                 raise HTTPException(500, "Failed to store chunk")
-
             return {"stored": True, "chunk_id": chunk_id, "size": len(ciphertext)}
 
         @app.get("/storage/retrieve/{chunk_id}")
         async def retrieve_chunk(chunk_id: str):
-            """Client downloads an encrypted chunk."""
             data = self.retrieve_chunk(chunk_id)
             if data is None:
                 raise HTTPException(404, f"Chunk {chunk_id} not found")
             return Response(content=data, media_type="application/octet-stream")
 
         @app.post("/storage/challenge")
-        async def handle_challenge(body: dict, background_tasks=None):
-            """Respond to a storage challenge — prove we have the chunk."""
-            from fastapi import BackgroundTasks
+        async def handle_challenge(body: dict):
             try:
                 challenge = StorageChallenge.from_dict(body)
             except Exception as e:
                 raise HTTPException(400, f"Invalid challenge: {e}")
-
             if challenge.is_expired():
                 raise HTTPException(400, "Challenge expired")
-
             response = self.respond_to_challenge(challenge)
             if response is None:
                 raise HTTPException(404, f"Chunk {challenge.chunk_id} not found")
-
-            # Build and submit proof
-            meta     = self._chunk_metadata.get(challenge.chunk_id, {})
-            owner    = meta.get("owner_address", "")
-            file_id  = meta.get("file_id", "")
+            meta       = self._chunk_metadata.get(challenge.chunk_id, {})
+            owner      = meta.get("owner_address", "")
+            file_id    = meta.get("file_id", "")
             ciphertext = self.retrieve_chunk(challenge.chunk_id)
-            expected = challenge.expected_response(ciphertext)
-
+            expected   = challenge.expected_response(ciphertext)
             proof = StorageProof.from_challenge(
-                challenge=challenge,
-                node_address=self.wallet.address,
-                owner_address=owner,
-                file_id=file_id,
-                bytes_stored=len(ciphertext),
-                response_hash=response,
-                expected_hash=expected,
+                challenge     = challenge,
+                node_address  = self.wallet.address,
+                owner_address = owner,
+                file_id       = file_id,
+                bytes_stored  = len(ciphertext),
+                response_hash = response,
+                expected_hash = expected,
             )
-            proof.node_signature = self.wallet.sign(proof.hash().encode())
-
+            proof.node_public_key = self.wallet.public_key_b64
+            proof.node_signature  = self.wallet.sign(proof.hash().encode())
             if self.chain_endpoint:
                 asyncio.create_task(self._submit_proof_to_chain(proof))
-
             self._challenges_passed += 1
             return {
                 "response_hash": response,
@@ -323,31 +266,31 @@ class BorderStorageNode:
         @app.get("/storage/status")
         async def status():
             return {
-                "node_id":          self.node_id,
-                "wallet":           self.wallet.address,
-                "region":           self.region,
-                "capacity_gb":      self.capacity_gb,
-                "used_bytes":       self._bytes_stored,
-                "used_gb":          round(self._bytes_stored / (1024**3), 4),
-                "chunks_stored":    len(self._chunks_stored),
-                "challenges_passed":self._challenges_passed,
-                "bc_earned":        round(self._bc_earned, 6),
-                "uptime":           round(time.time() - self._start_time, 1),
+                "node_id":           self.node_id,
+                "wallet":            self.wallet.address,
+                "region":            self.region,
+                "capacity_gb":       self.capacity_gb,
+                "used_bytes":        self._bytes_stored,
+                "used_gb":           round(self._bytes_stored / (1024**3), 4),
+                "chunks_stored":     len(self._chunks_stored),
+                "challenges_passed": self._challenges_passed,
+                "bc_earned":         round(self._bc_earned, 6),
+                "uptime":            round(time.time() - self._start_time, 1),
                 "price_bc_per_gb_day": self.price_bc_per_gb_day,
             }
 
         @app.get("/.border/storage")
         async def node_card():
             return {
-                "border":       "0.1",
-                "type":         "STORAGE",
-                "node_id":      self.node_id,
-                "endpoint":     self.endpoint,
-                "region":       self.region,
-                "capacity_gb":  self.capacity_gb,
-                "used_gb":      round(self._bytes_stored / (1024**3), 4),
+                "border":            "0.1",
+                "type":              "STORAGE",
+                "node_id":           self.node_id,
+                "endpoint":          self.endpoint,
+                "region":            self.region,
+                "capacity_gb":       self.capacity_gb,
+                "used_gb":           round(self._bytes_stored / (1024**3), 4),
                 "price_bc_per_gb_day": self.price_bc_per_gb_day,
-                "wallet":       self.wallet.address,
+                "wallet":            self.wallet.address,
             }
 
         @app.get("/storage/health")
@@ -355,10 +298,6 @@ class BorderStorageNode:
             return {"status": "ok", "ts": int(time.time() * 1000)}
 
         return app
-
-    # ─────────────────────────────────────────────────────
-    # Persistence
-    # ─────────────────────────────────────────────────────
 
     def _index_path(self) -> Path:
         return self.storage_path / "index.json"
@@ -379,9 +318,9 @@ class BorderStorageNode:
         if not path.exists():
             return
         data = json.loads(path.read_text())
-        self._chunks_stored   = set(data.get("chunks", []))
-        self._chunk_metadata  = data.get("metadata", {})
-        self._bytes_stored    = data.get("bytes", 0)
+        self._chunks_stored  = set(data.get("chunks", []))
+        self._chunk_metadata = data.get("metadata", {})
+        self._bytes_stored   = data.get("bytes", 0)
 
 
 def serve_storage(
@@ -415,17 +354,17 @@ def serve_storage(
         logger.info(f"[StorageNode] Created new wallet: {wallet.address}")
 
     node = BorderStorageNode(
-        node_id=node_id,
-        wallet=wallet,
-        storage_path=storage_path,
-        capacity_gb=capacity_gb,
-        chain_endpoint=chain_endpoint,
-        endpoint=f"http://{host}:{port}",
-        region=region,
+        node_id        = node_id,
+        wallet         = wallet,
+        storage_path   = storage_path,
+        capacity_gb    = capacity_gb,
+        chain_endpoint = chain_endpoint,
+        endpoint       = f"http://{host}:{port}",
+        region         = region,
     )
     app = node.create_app()
 
-    print(f"\n💾 BorderStore Node")
+    print(f"\nBorderStore Node")
     print(f"   Node ID  : {node_id}")
     print(f"   Wallet   : {wallet.address}")
     print(f"   Capacity : {capacity_gb}GB")

@@ -1,6 +1,6 @@
 """
-Phantom Obfuscation Layer
-Makes Phantom traffic indistinguishable from normal HTTPS web traffic.
+Border Obfuscation Layer
+Makes Border traffic indistinguishable from normal HTTPS web traffic.
 """
 
 from __future__ import annotations
@@ -8,7 +8,7 @@ from __future__ import annotations
 import base64
 import json
 import os
-import struct
+import secrets
 import time
 import uuid
 from dataclasses import dataclass
@@ -20,7 +20,7 @@ from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 
-# Cover domains — traffic appears to come from/go to these
+# Cover domains -- traffic appears to come from/go to these
 COVER_DOMAINS = [
     "api.analytics-gateway.com",
     "cdn.metrics-collector.net",
@@ -29,7 +29,7 @@ COVER_DOMAINS = [
     "sync.data-pipeline.net",
 ]
 
-# Padding sizes — random selection makes size fingerprinting hard
+# Padding sizes -- random selection makes size fingerprinting hard
 PADDING_SIZES = [64, 128, 256, 512, 1024, 2048]
 
 # User agents to cycle through
@@ -68,12 +68,13 @@ class BorderSession:
         their_public_key = X25519PublicKey.from_public_bytes(their_public_key_bytes)
         raw_shared = self.our_private_key.exchange(their_public_key)
 
-        # Derive 32-byte session key via HKDF
+        # Derive 32-byte session key via HKDF.
+        # Salt = session_id bytes -- ties the derived key to this specific session.
         hkdf = HKDF(
             algorithm=hashes.SHA256(),
             length=32,
-            salt=None,
-            info=b"phantom-session-v1",
+            salt=self.session_id.encode(),
+            info=b"border-session-v1",
         )
         self.shared_key = hkdf.derive(raw_shared)
         self.cipher = ChaCha20Poly1305(self.shared_key)
@@ -81,7 +82,7 @@ class BorderSession:
     def encrypt(self, plaintext: bytes) -> Tuple[bytes, bytes]:
         """Encrypt plaintext. Returns (nonce, ciphertext)."""
         if not self.cipher:
-            raise RuntimeError("Session not established — complete handshake first")
+            raise RuntimeError("Session not established -- complete handshake first")
         nonce = os.urandom(12)
         ciphertext = self.cipher.encrypt(nonce, plaintext, None)
         return nonce, ciphertext
@@ -89,13 +90,13 @@ class BorderSession:
     def decrypt(self, nonce: bytes, ciphertext: bytes) -> bytes:
         """Decrypt ciphertext."""
         if not self.cipher:
-            raise RuntimeError("Session not established — complete handshake first")
+            raise RuntimeError("Session not established -- complete handshake first")
         return self.cipher.decrypt(nonce, ciphertext, None)
 
 
 class BorderObfuscator:
     """
-    Wraps Phantom protocol messages in HTTPS-mimicry clothing.
+    Wraps Border protocol messages in HTTPS-mimicry clothing.
     Traffic appears to be normal JSON API calls.
     """
 
@@ -108,32 +109,26 @@ class BorderObfuscator:
         session: BorderSession,
     ) -> dict:
         """
-        Wrap a Phantom request payload into an HTTPS-mimicry envelope.
+        Wrap a Border request payload into an HTTPS-mimicry envelope.
         Returns a dict that looks like a normal JSON API request body.
         """
-        # Serialize payload
         raw = json.dumps(payload).encode()
-
-        # Encrypt
         nonce, ciphertext = session.encrypt(raw)
 
-        # Build inner envelope with our public key for key exchange
         inner = {
             "pk": base64.b64encode(session.our_public_key_bytes).decode(),
-            "n": base64.b64encode(nonce).decode(),
-            "d": base64.b64encode(ciphertext).decode(),
+            "n":  base64.b64encode(nonce).decode(),
+            "d":  base64.b64encode(ciphertext).decode(),
         }
         inner_bytes = json.dumps(inner).encode()
 
-        # Add random padding to defeat size fingerprinting
         padding_size = _random_choice(PADDING_SIZES)
         padding = base64.b64encode(os.urandom(padding_size)).decode()
 
-        # Final envelope looks like a normal analytics/tracking API call
         return {
             "session": base64.b64encode(inner_bytes).decode(),
-            "ts": int(time.time() * 1000),
-            "v": "1",
+            "ts":  int(time.time() * 1000),
+            "v":   "1",
             "mid": str(uuid.uuid4()),
             "_pad": padding,
         }
@@ -148,10 +143,9 @@ class BorderObfuscator:
         inner = json.loads(inner_bytes)
 
         their_pubkey = base64.b64decode(inner["pk"])
-        nonce = base64.b64decode(inner["n"])
-        ciphertext = base64.b64decode(inner["d"])
+        nonce        = base64.b64decode(inner["n"])
+        ciphertext   = base64.b64decode(inner["d"])
 
-        # Complete key exchange if not done
         if not session.shared_key:
             session.complete_handshake(their_pubkey)
 
@@ -171,11 +165,11 @@ class BorderObfuscator:
 
         return {
             "status": "ok",
-            "data": base64.b64encode(ciphertext).decode(),
-            "meta": base64.b64encode(nonce).decode(),
-            "rid": str(uuid.uuid4()),
-            "t": int(time.time() * 1000),
-            "_x": base64.b64encode(os.urandom(padding_size)).decode(),
+            "data":   base64.b64encode(ciphertext).decode(),
+            "meta":   base64.b64encode(nonce).decode(),
+            "rid":    str(uuid.uuid4()),
+            "t":      int(time.time() * 1000),
+            "_x":     base64.b64encode(os.urandom(padding_size)).decode(),
         }
 
     def unwrap_response(
@@ -184,28 +178,27 @@ class BorderObfuscator:
         session: BorderSession,
     ) -> dict:
         """Unwrap a response envelope."""
-        nonce = base64.b64decode(envelope["meta"])
+        nonce      = base64.b64decode(envelope["meta"])
         ciphertext = base64.b64decode(envelope["data"])
-        plaintext = session.decrypt(nonce, ciphertext)
+        plaintext  = session.decrypt(nonce, ciphertext)
         return json.loads(plaintext)
 
     def get_cover_headers(self) -> dict:
         """Generate HTTP headers that mimic a normal browser request."""
         domain = _random_choice(COVER_DOMAINS)
         return {
-            "Content-Type": "application/json",
-            "User-Agent": _random_choice(USER_AGENTS),
-            "Accept": "application/json, text/plain, */*",
+            "Content-Type":    "application/json",
+            "User-Agent":      _random_choice(USER_AGENTS),
+            "Accept":          "application/json, text/plain, */*",
             "Accept-Language": "en-US,en;q=0.9",
             "Accept-Encoding": "gzip, deflate, br",
-            "Origin": f"https://{domain}",
-            "Referer": f"https://{domain}/app",
-            "X-Request-ID": str(uuid.uuid4()),
-            "Cache-Control": "no-cache",
+            "Origin":          f"https://{domain}",
+            "Referer":         f"https://{domain}/app",
+            "X-Request-ID":    str(uuid.uuid4()),
+            "Cache-Control":   "no-cache",
         }
 
 
 def _random_choice(lst: list):
-    """Pick a random element from a list."""
-    idx = struct.unpack("I", os.urandom(4))[0] % len(lst)
-    return lst[idx]
+    """Pick a cryptographically random element from a list (no modulo bias)."""
+    return secrets.choice(lst)

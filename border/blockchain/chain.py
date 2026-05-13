@@ -121,6 +121,10 @@ class BorderChain:
             return False
         if any(p.proof_id == proof.proof_id for p in self._pending_storage_proofs):
             return False
+        # Verify the node actually signed this proof — prevents forgery
+        if not proof.verify_signature():
+            logger.warning(f"[Chain] Storage proof rejected — invalid signature: {proof.proof_id}")
+            return False
         self._pending_storage_proofs.append(proof)
         logger.info(f"[Chain] Storage proof queued: {proof.proof_id} +{proof.reward_bc:.8f} BC → {proof.node_address[:16]}...")
         return True
@@ -145,6 +149,9 @@ class BorderChain:
         for proof in block.bandwidth_proofs:
             if proof.receipt_id in self._spent_receipts:
                 return False, f"double-spend: receipt {proof.receipt_id}"
+        for proof in block.storage_proofs:
+            if not proof.verify_signature():
+                return False, f"storage proof signature invalid: {proof.proof_id}"
         for tx in block.transactions:
             if tx.from_address == Transaction.COINBASE_ADDRESS:
                 continue

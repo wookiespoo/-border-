@@ -1,5 +1,5 @@
 """
-BorderStore — Storage Proof + Challenge System
+BorderStore -- Storage Proof + Challenge System
 ================================================
 Proof of Storage: a node proves it still holds a chunk by
 responding to a random challenge it could not have pre-computed.
@@ -15,6 +15,7 @@ Every passed challenge = a StorageProof submitted to the chain = BC earned.
 from __future__ import annotations
 
 import hashlib
+import json
 import secrets
 import time
 import uuid
@@ -23,10 +24,6 @@ from typing import Optional
 
 from .chunk import BC_PER_GB_PER_DAY, BC_PER_CHALLENGE
 
-
-# ─────────────────────────────────────────────────────────
-# Storage Challenge
-# ─────────────────────────────────────────────────────────
 
 @dataclass
 class StorageChallenge:
@@ -50,10 +47,10 @@ class StorageChallenge:
     @classmethod
     def issue(cls, chunk_id: str, node_address: str) -> "StorageChallenge":
         return cls(
-            challenge_id=f"chal_{uuid.uuid4().hex[:12]}",
-            chunk_id=chunk_id,
-            node_address=node_address,
-            nonce=secrets.token_hex(32),
+            challenge_id = f"chal_{uuid.uuid4().hex[:12]}",
+            chunk_id     = chunk_id,
+            node_address = node_address,
+            nonce        = secrets.token_hex(32),
         )
 
     def expected_response(self, ciphertext: bytes) -> str:
@@ -78,10 +75,6 @@ class StorageChallenge:
         return cls(**d)
 
 
-# ─────────────────────────────────────────────────────────
-# Storage Proof
-# ─────────────────────────────────────────────────────────
-
 @dataclass
 class StorageProof:
     """
@@ -89,69 +82,70 @@ class StorageProof:
     Submitted to the BorderChain to claim BC rewards.
 
     Two types:
-      CHALLENGE  — node responded correctly to a random challenge
-      DURATION   — node claims it stored a chunk for N seconds (periodic)
+      CHALLENGE  -- node responded correctly to a random challenge
+      DURATION   -- node claims it stored a chunk for N seconds (periodic)
     """
-    proof_id:        str
-    proof_type:      str        # "CHALLENGE" or "DURATION"
-    node_address:    str        # BC wallet of storage node
-    owner_address:   str        # BC wallet of file owner
-    chunk_id:        str
-    file_id:         str
-    bytes_stored:    int        # chunk size in bytes
-    duration_seconds: float     # how long stored (for DURATION proofs)
-    challenge_id:    Optional[str]  = None  # for CHALLENGE proofs
-    challenge_nonce: Optional[str]  = None
-    response_hash:   Optional[str]  = None  # node's challenge response
-    expected_hash:   Optional[str]  = None  # what the correct response was
-    timestamp:       float           = field(default_factory=time.time)
-    node_signature:  str             = ""
+    proof_id:         str
+    proof_type:       str           # "CHALLENGE" or "DURATION"
+    node_address:     str           # BC wallet of storage node
+    owner_address:    str           # BC wallet of file owner
+    chunk_id:         str
+    file_id:          str
+    bytes_stored:     int           # chunk size in bytes
+    duration_seconds: float         # how long stored (for DURATION proofs)
+    challenge_id:     Optional[str] = None   # for CHALLENGE proofs
+    challenge_nonce:  Optional[str] = None
+    response_hash:    Optional[str] = None   # node's challenge response
+    expected_hash:    Optional[str] = None   # what the correct response was
+    timestamp:        float          = field(default_factory=time.time)
+    node_signature:   str            = ""
+    node_public_key:  str            = ""    # Ed25519 public key (base64) for chain verification
 
     @classmethod
     def from_challenge(
         cls,
-        challenge:    "StorageChallenge",
-        node_address: str,
-        owner_address:str,
-        file_id:      str,
-        bytes_stored: int,
-        response_hash:str,
-        expected_hash:str,
+        challenge:     "StorageChallenge",
+        node_address:  str,
+        owner_address: str,
+        file_id:       str,
+        bytes_stored:  int,
+        response_hash: str,
+        expected_hash: str,
     ) -> "StorageProof":
         return cls(
-            proof_id=f"sproof_{uuid.uuid4().hex[:12]}",
-            proof_type="CHALLENGE",
-            node_address=node_address,
-            owner_address=owner_address,
-            chunk_id=challenge.chunk_id,
-            file_id=file_id,
-            bytes_stored=bytes_stored,
-            duration_seconds=0.0,
-            challenge_id=challenge.challenge_id,
-            challenge_nonce=challenge.nonce,
-            response_hash=response_hash,
-            expected_hash=expected_hash,
+            proof_id         = f"sproof_{uuid.uuid4().hex[:12]}",
+            proof_type       = "CHALLENGE",
+            node_address     = node_address,
+            owner_address    = owner_address,
+            chunk_id         = challenge.chunk_id,
+            file_id          = file_id,
+            bytes_stored     = bytes_stored,
+            duration_seconds = 0.0,
+            challenge_id     = challenge.challenge_id,
+            challenge_nonce  = challenge.nonce,
+            response_hash    = response_hash,
+            expected_hash    = expected_hash,
         )
 
     @classmethod
     def from_duration(
         cls,
-        node_address:    str,
-        owner_address:   str,
-        chunk_id:        str,
-        file_id:         str,
-        bytes_stored:    int,
+        node_address:     str,
+        owner_address:    str,
+        chunk_id:         str,
+        file_id:          str,
+        bytes_stored:     int,
         duration_seconds: float,
     ) -> "StorageProof":
         return cls(
-            proof_id=f"sproof_{uuid.uuid4().hex[:12]}",
-            proof_type="DURATION",
-            node_address=node_address,
-            owner_address=owner_address,
-            chunk_id=chunk_id,
-            file_id=file_id,
-            bytes_stored=bytes_stored,
-            duration_seconds=duration_seconds,
+            proof_id         = f"sproof_{uuid.uuid4().hex[:12]}",
+            proof_type       = "DURATION",
+            node_address     = node_address,
+            owner_address    = owner_address,
+            chunk_id         = chunk_id,
+            file_id          = file_id,
+            bytes_stored     = bytes_stored,
+            duration_seconds = duration_seconds,
         )
 
     def is_valid(self) -> bool:
@@ -167,11 +161,7 @@ class StorageProof:
         return False
 
     def reward_bc(self) -> float:
-        """
-        BC earned for this proof.
-        CHALLENGE: flat per-challenge reward
-        DURATION:  proportional to bytes × time stored
-        """
+        """BC earned for this proof."""
         if self.proof_type == "CHALLENGE":
             return BC_PER_CHALLENGE
         elif self.proof_type == "DURATION":
@@ -181,10 +171,15 @@ class StorageProof:
         return 0.0
 
     def hash(self) -> str:
-        content = (
-            f"{self.proof_id}:{self.node_address}:{self.chunk_id}:"
-            f"{self.bytes_stored}:{self.timestamp}"
-        )
+        """Canonical JSON hash -- matches StorageProofRecord.hash() on-chain."""
+        content = json.dumps({
+            "proof_id":         self.proof_id,
+            "node_address":     self.node_address,
+            "chunk_id":         self.chunk_id,
+            "bytes_stored":     self.bytes_stored,
+            "duration_seconds": self.duration_seconds,
+            "timestamp":        self.timestamp,
+        }, sort_keys=True)
         return hashlib.sha256(content.encode()).hexdigest()
 
     def to_dict(self) -> dict:
@@ -203,8 +198,25 @@ class StorageProof:
             "expected_hash":    self.expected_hash,
             "timestamp":        self.timestamp,
             "node_signature":   self.node_signature,
+            "node_public_key":  self.node_public_key,
         }
 
     @classmethod
     def from_dict(cls, d: dict) -> "StorageProof":
-        return cls(**{k: d.get(k) for k in cls.__dataclass_fields__})
+        return cls(
+            proof_id         = d["proof_id"],
+            proof_type       = d["proof_type"],
+            node_address     = d["node_address"],
+            owner_address    = d["owner_address"],
+            chunk_id         = d["chunk_id"],
+            file_id          = d["file_id"],
+            bytes_stored     = d["bytes_stored"],
+            duration_seconds = d["duration_seconds"],
+            challenge_id     = d.get("challenge_id"),
+            challenge_nonce  = d.get("challenge_nonce"),
+            response_hash    = d.get("response_hash"),
+            expected_hash    = d.get("expected_hash"),
+            timestamp        = d.get("timestamp", time.time()),
+            node_signature   = d.get("node_signature", ""),
+            node_public_key  = d.get("node_public_key", ""),
+        )

@@ -387,8 +387,17 @@ class WorkerDaemon:
 
     async def _run_custom(self, job: ComputeJob) -> dict:
         """
-        Run an arbitrary Python snippet in a sandboxed subprocess.
+        Run an arbitrary Python snippet in a subprocess.
         Input: { "code": "print('hello')", "timeout": 30 }
+
+        SECURITY WARNING: This is NOT a true sandbox. The subprocess runs
+        with the same OS user and filesystem access as the daemon process.
+        Production deployments MUST wrap this in OS-level isolation:
+          - Linux: seccomp + nsjail + network namespace
+          - Container: rootless Docker with --network=none --read-only
+          - VM: dedicated microVM (gVisor/Firecracker)
+        Do NOT expose this endpoint to untrusted job submitters without
+        implementing one of the above isolation layers first.
         """
         code    = job.input_data.get("code", "")
         timeout = min(job.input_data.get("timeout", 30), 60)

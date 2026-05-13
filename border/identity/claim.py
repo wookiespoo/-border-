@@ -1,17 +1,17 @@
 """
-BorderID — Verifiable Claims & Attestations
+BorderID -- Verifiable Claims & Attestations
 
 A VerifiableClaim is a signed statement one DID makes about another
 (or about itself). Claims form the trust graph of the Border network.
 
 Claim types:
-  NODE_TYPE   — "I am a RELAY / COMPUTE / STORAGE node"
-  REGION      — "I operate in US / EU / APAC"
-  CAPACITY    — "I have X GB storage / Y GPU-hours / Z Gbps bandwidth"
-  STAKE       — "I have staked N BC"
-  UPTIME      — "I have been online for N hours"
-  PEER_TRUST  — "I vouch for this node" (cross-attestation)
-  CUSTOM      — arbitrary key/value signed claim
+  NODE_TYPE   -- "I am a RELAY / COMPUTE / STORAGE node"
+  REGION      -- "I operate in US / EU / APAC"
+  CAPACITY    -- "I have X GB storage / Y GPU-hours / Z Gbps bandwidth"
+  STAKE       -- "I have staked N BC"
+  UPTIME      -- "I have been online for N hours"
+  PEER_TRUST  -- "I vouch for this node" (cross-attestation)
+  CUSTOM      -- arbitrary key/value signed claim
 """
 
 from __future__ import annotations
@@ -39,13 +39,13 @@ class ClaimType(str, Enum):
 class VerifiableClaim:
     """
     A signed statement:
-      issuer_did  — who is making the claim
-      subject_did — who the claim is about (can be the same as issuer)
-      claim_type  — category
-      claim_data  — arbitrary payload dict
-      issued_at   — unix timestamp
-      expires_at  — None = never expires
-      signature   — hex signature of claim_hash() by issuer wallet
+      issuer_did  -- who is making the claim
+      subject_did -- who the claim is about (can be the same as issuer)
+      claim_type  -- category
+      claim_data  -- arbitrary payload dict
+      issued_at   -- unix timestamp
+      expires_at  -- None = never expires
+      signature   -- base64 Ed25519 signature of claim_hash() by issuer wallet
     """
     claim_id:    str
     issuer_did:  str
@@ -56,7 +56,7 @@ class VerifiableClaim:
     expires_at:  Optional[float]  = None
     signature:   Optional[str]    = None
 
-    # ── Hash ──────────────────────────────────────────────
+    # -- Hash --------------------------------------------------
     def claim_hash(self) -> str:
         content = {
             "claim_id":    self.claim_id,
@@ -69,7 +69,7 @@ class VerifiableClaim:
         }
         return hashlib.sha256(json.dumps(content, sort_keys=True).encode()).hexdigest()
 
-    # ── Validity ──────────────────────────────────────────
+    # -- Validity ----------------------------------------------
     @property
     def is_expired(self) -> bool:
         if self.expires_at is None:
@@ -80,29 +80,30 @@ class VerifiableClaim:
     def is_self_attested(self) -> bool:
         return self.issuer_did == self.subject_did
 
-    # ── Sign / verify ─────────────────────────────────────
+    # -- Sign / verify ----------------------------------------
     def sign(self, wallet) -> None:
         """Sign with the issuer's wallet. wallet.sign() must accept bytes."""
         self.signature = wallet.sign(self.claim_hash().encode())
 
-    def verify_signature(self, public_key_hex: str) -> bool:
-        """Verify issuer signature without a full wallet object."""
+    def verify_signature(self, public_key_b64: str) -> bool:
+        """
+        Verify issuer signature using the issuer's Ed25519 public key (base64).
+        Matches the key format stored in BorderWallet.public_key_b64.
+        """
         if not self.signature:
             return False
         try:
-            import ecdsa, binascii
-            vk = ecdsa.VerifyingKey.from_string(
-                binascii.unhexlify(public_key_hex),
-                curve=ecdsa.SECP256k1,
-            )
-            return vk.verify(
-                binascii.unhexlify(self.signature),
-                self.claim_hash().encode(),
-            )
+            import base64
+            from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+            pub_bytes = base64.b64decode(public_key_b64)
+            pub_key   = Ed25519PublicKey.from_public_bytes(pub_bytes)
+            sig_bytes = base64.b64decode(self.signature)
+            pub_key.verify(sig_bytes, self.claim_hash().encode())
+            return True
         except Exception:
             return False
 
-    # ── Serialisation ─────────────────────────────────────
+    # -- Serialisation ----------------------------------------
     def to_dict(self) -> dict:
         return {
             "claim_id":    self.claim_id,
@@ -128,7 +129,7 @@ class VerifiableClaim:
             signature   = d.get("signature"),
         )
 
-    # ── Factories ─────────────────────────────────────────
+    # -- Factories --------------------------------------------
     @classmethod
     def create(
         cls,
@@ -149,7 +150,7 @@ class VerifiableClaim:
             expires_at  = (now + ttl_seconds) if ttl_seconds else None,
         )
 
-    # ── Convenience constructors ──────────────────────────
+    # -- Convenience constructors -----------------------------
     @classmethod
     def node_type(cls, issuer_did: str, node_type: str) -> "VerifiableClaim":
         return cls.create(issuer_did, issuer_did, ClaimType.NODE_TYPE,
@@ -177,7 +178,5 @@ class VerifiableClaim:
 
     def __repr__(self) -> str:
         exp = f" exp={self.expires_at:.0f}" if self.expires_at else ""
-        sig = "✓" if self.signature else "unsigned"
-        return (f"<Claim {self.claim_type} "
-                f"issuer={self.issuer_did[:30]}... "
-                f"subj={self.subject_did[:30]}...{exp} {sig}>")
+        sig = "signed" if self.signature else "unsigned"
+        return f"<VerifiableClaim {self.claim_type} issuer={self.issuer_did[:20]}... [{sig}]{exp}>"

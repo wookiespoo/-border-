@@ -1,17 +1,17 @@
 """
-BorderDNS Node — FastAPI DNS service
+BorderDNS Node -- FastAPI DNS service
 
 Routes:
-  POST /dns/register           — register a .border name
-  GET  /dns/resolve/{name}     — resolve name → records
-  GET  /dns/address/{name}     — resolve name → BC address
-  GET  /dns/did/{name}         — resolve name → DID
-  GET  /dns/services/{name}    — resolve name → service endpoints
-  POST /dns/transfer           — transfer name to new owner
-  GET  /dns/names/{address}    — list all names owned by address
-  GET  /dns/search             — search names by keyword
-  GET  /dns/stats              — registry stats
-  GET  /.border/dns            — service discovery
+  POST /dns/register           -- register a .border name
+  GET  /dns/resolve/{name}     -- resolve name -> records
+  GET  /dns/address/{name}     -- resolve name -> BC address
+  GET  /dns/did/{name}         -- resolve name -> DID
+  GET  /dns/services/{name}    -- resolve name -> service endpoints
+  POST /dns/transfer           -- transfer name to new owner
+  GET  /dns/names/{address}    -- list all names owned by address
+  GET  /dns/search             -- search names by keyword
+  GET  /dns/stats              -- registry stats
+  GET  /.border/dns            -- service discovery
 """
 
 from __future__ import annotations
@@ -44,7 +44,7 @@ class BorderDNSNode:
             raise RuntimeError("fastapi not installed")
 
         app = FastAPI(title="BorderDNS", version="1.0.0",
-                      description="Decentralised naming for the Border network — no registrar, no ICANN")
+                      description="Decentralised naming for the Border network -- no registrar, no ICANN")
 
         @app.get("/.border/dns")
         def discovery():
@@ -58,10 +58,20 @@ class BorderDNSNode:
 
         @app.post("/dns/register")
         def register(body: dict):
+            """
+            Register a .border name. Body must include:
+              owner_public_key  -- Ed25519 public key (base64) of the owner wallet
+              owner_signature   -- wallet.sign(f"register:{name}:{owner_address}".encode())
+            """
             try:
                 record   = DNSRecord.from_dict(body)
                 fee_paid = body.get("fee_paid", 0.0)
-                ok, reason = self.registry.register(record, fee_paid=fee_paid)
+                ok, reason = self.registry.register(
+                    record,
+                    fee_paid         = fee_paid,
+                    owner_public_key = body.get("owner_public_key", ""),
+                    owner_signature  = body.get("owner_signature", ""),
+                )
                 if not ok:
                     raise HTTPException(400, reason)
                 return {"status": "registered", "name": record.name,
@@ -99,9 +109,16 @@ class BorderDNSNode:
 
         @app.post("/dns/transfer")
         def transfer(body: dict):
+            """
+            Transfer a .border name. Body must include:
+              from_public_key -- Ed25519 public key (base64) of the current owner
+              from_signature  -- wallet.sign(f"transfer:{name}:{from_address}:{to_address}".encode())
+            """
             ok, reason = self.registry.transfer(
                 body["name"], body["from_address"],
-                body["to_address"], body.get("fee_paid", 0.0)
+                body["to_address"], body.get("fee_paid", 0.0),
+                from_public_key = body.get("from_public_key", ""),
+                from_signature  = body.get("from_signature", ""),
             )
             if not ok:
                 raise HTTPException(400, reason)

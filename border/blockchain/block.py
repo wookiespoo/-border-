@@ -22,13 +22,13 @@ BC_PER_GB_PER_DAY    = 0.01
 
 @dataclass
 class BandwidthProof:
-    receipt_id: str
-    relay_address: str
-    client_id: str
-    bytes_forwarded: int
-    timestamp: float
-    session_id: str
-    relay_signature: str
+    receipt_id:       str
+    relay_address:    str
+    client_id:        str
+    bytes_forwarded:  int
+    timestamp:        float
+    session_id:       str
+    relay_signature:  str
     client_signature: Optional[str] = None
 
     def hash(self) -> str:
@@ -98,35 +98,59 @@ class StorageProofRecord:
     duration_seconds: float
     timestamp:        float
     reward_bc:        float = 0.0
+    # Ed25519 signature + public key so the chain can verify authenticity
+    node_signature:   str   = ""
+    node_public_key:  str   = ""
 
     def hash(self) -> str:
-        content = f"{self.proof_id}:{self.node_address}:{self.chunk_id}:{self.timestamp}"
+        """Canonical hash over fields that a storage node commits to."""
+        content = json.dumps({
+            "proof_id":         self.proof_id,
+            "node_address":     self.node_address,
+            "chunk_id":         self.chunk_id,
+            "bytes_stored":     self.bytes_stored,
+            "duration_seconds": self.duration_seconds,
+            "timestamp":        self.timestamp,
+        }, sort_keys=True)
         return hashlib.sha256(content.encode()).hexdigest()
+
+    def verify_signature(self) -> bool:
+        """Return True if node_signature is a valid Ed25519 sig over hash()."""
+        if not self.node_signature or not self.node_public_key:
+            return False
+        from .wallet import BorderWallet
+        return BorderWallet.verify(
+            self.node_public_key,
+            self.hash().encode(),
+            self.node_signature,
+        )
 
     def to_dict(self) -> dict:
         return {"proof_id":self.proof_id,"proof_type":self.proof_type,"node_address":self.node_address,
                 "owner_address":self.owner_address,"chunk_id":self.chunk_id,"file_id":self.file_id,
                 "bytes_stored":self.bytes_stored,"duration_seconds":self.duration_seconds,
-                "timestamp":self.timestamp,"reward_bc":self.reward_bc}
+                "timestamp":self.timestamp,"reward_bc":self.reward_bc,
+                "node_signature":self.node_signature,"node_public_key":self.node_public_key}
 
     @classmethod
     def from_dict(cls, d: dict) -> "StorageProofRecord":
         fields = {"proof_id","proof_type","node_address","owner_address","chunk_id",
-                  "file_id","bytes_stored","duration_seconds","timestamp","reward_bc"}
+                  "file_id","bytes_stored","duration_seconds","timestamp","reward_bc",
+                  "node_signature","node_public_key"}
         return cls(**{k: d[k] for k in fields if k in d})
 
 
 @dataclass
 class Block:
-    index: int
-    timestamp: float
-    previous_hash: str
-    miner_address: str
+    index:            int
+    timestamp:        float
+    previous_hash:    str
+    miner_address:    str
     bandwidth_proofs: List[BandwidthProof]    = field(default_factory=list)
     transactions:     List[Transaction]        = field(default_factory=list)
     compute_proofs:   List[ComputeProofRecord] = field(default_factory=list)
     storage_proofs:   List[StorageProofRecord] = field(default_factory=list)
-    block_hash: str = ""
+    block_hash:       str                      = ""
 
     GENESIS_HASH = "0" * 64
 
@@ -160,7 +184,8 @@ class Block:
         total_bw      = sum(p.border_coin_value for p in self.bandwidth_proofs)
         total_compute = sum(p.compute_reward_bc for p in self.compute_proofs)
         total_storage = sum(p.reward_bc for p in self.storage_proofs)
-        total_fees    = sum(tx.fee for tx in self.transactions if tx.from_address != Transaction.COINBASE_ADDRESS)
+        total_fees    = sum(tx.fee for tx in self.transactions
+                           if tx.from_address != Transaction.COINBASE_ADDRESS)
         total_reward  = BLOCK_REWARD + total_bw + total_compute + total_storage + total_fees
         self.transactions.insert(0, Transaction.coinbase(
             to_address=self.miner_address, reward=round(total_reward, 8)))
@@ -188,26 +213,28 @@ class Block:
 
     def to_dict(self) -> dict:
         return {
-            "index":self.index,"timestamp":self.timestamp,"previous_hash":self.previous_hash,
-            "miner_address":self.miner_address,
+            "index":           self.index,
+            "timestamp":       self.timestamp,
+            "previous_hash":   self.previous_hash,
+            "miner_address":   self.miner_address,
             "bandwidth_proofs":[p.to_dict() for p in self.bandwidth_proofs],
-            "compute_proofs":[p.to_dict() for p in self.compute_proofs],
-            "storage_proofs":[p.to_dict() for p in self.storage_proofs],
-            "transactions":[tx.to_dict() for tx in self.transactions],
-            "block_hash":self.block_hash,"total_bytes":self.total_bytes,
-            "total_bandwidth_pc":self.total_bandwidth_pc,
-            "total_compute_bc":self.total_compute_bc,
-            "total_storage_bc":self.total_storage_bc,
+            "compute_proofs":  [p.to_dict() for p in self.compute_proofs],
+            "storage_proofs":  [p.to_dict() for p in self.storage_proofs],
+            "transactions":    [tx.to_dict() for tx in self.transactions],
+            "block_hash":      self.block_hash,
         }
 
     @classmethod
     def from_dict(cls, d: dict) -> "Block":
-        return cls(
-            index=d["index"], timestamp=d["timestamp"],
-            previous_hash=d["previous_hash"], miner_address=d["miner_address"],
-            bandwidth_proofs=[BandwidthProof.from_dict(p) for p in d.get("bandwidth_proofs",[])],
-            compute_proofs=[ComputeProofRecord.from_dict(p) for p in d.get("compute_proofs",[])],
-            storage_proofs=[StorageProofRecord.from_dict(p) for p in d.get("storage_proofs",[])],
-            transactions=[Transaction.from_dict(tx) for tx in d.get("transactions",[])],
-            block_hash=d.get("block_hash",""),
+        block = cls(
+            index            = d["index"],
+            timestamp        = d["timestamp"],
+            previous_hash    = d["previous_hash"],
+            miner_address    = d["miner_address"],
+            bandwidth_proofs = [BandwidthProof.from_dict(p) for p in d.get("bandwidth_proofs", [])],
+            transactions     = [Transaction.from_dict(tx) for tx in d.get("transactions", [])],
+            compute_proofs   = [ComputeProofRecord.from_dict(p) for p in d.get("compute_proofs", [])],
+            storage_proofs   = [StorageProofRecord.from_dict(p) for p in d.get("storage_proofs", [])],
+            block_hash       = d.get("block_hash", ""),
         )
+        return block

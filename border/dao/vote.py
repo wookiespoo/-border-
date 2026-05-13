@@ -42,6 +42,21 @@ class Vote:
     def sign(self, wallet) -> None:
         self.signature = wallet.sign(self.hash().encode())
 
+    def verify_signature(self, public_key_b64: str) -> bool:
+        """Verify the voter's Ed25519 signature over hash()."""
+        if not self.signature:
+            return False
+        try:
+            import base64
+            from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+            pub_bytes = base64.b64decode(public_key_b64)
+            pub_key   = Ed25519PublicKey.from_public_bytes(pub_bytes)
+            sig_bytes = base64.b64decode(self.signature)
+            pub_key.verify(sig_bytes, self.hash().encode())
+            return True
+        except Exception:
+            return False
+
     def to_dict(self) -> dict:
         return {
             "vote_id":       self.vote_id,
