@@ -229,17 +229,19 @@ class BorderRelay:
         """Build, sign, and enqueue a BandwidthProof."""
         import uuid as _uuid
         receipt_id = f"rcpt_{stats.session_id}_{stats.proof_count}_{_uuid.uuid4().hex[:8]}"
+        ts = time.time()
         proof = BandwidthProof(
-            receipt_id     = receipt_id,
-            relay_address  = stats.relay_address,
-            client_id      = stats.client_id,
-            bytes_forwarded= byte_count,
-            timestamp      = time.time(),
-            session_id     = stats.session_id,
-            relay_signature= self.wallet.sign(
-                f"{receipt_id}:{stats.relay_address}:{byte_count}".encode()
-            ),
+            receipt_id       = receipt_id,
+            relay_address    = stats.relay_address,
+            client_id        = stats.client_id,
+            bytes_forwarded  = byte_count,
+            timestamp        = ts,
+            session_id       = stats.session_id,
+            relay_public_key = self.wallet.public_key_b64,
+            relay_signature  = "",   # filled below after hash is stable
         )
+        # Sign the canonical hash (relay_address:client_id:bytes:timestamp)
+        proof.relay_signature = self.wallet.sign(proof.hash().encode())
         stats.mark_flush(stats.total_bytes)
         self._proof_queue.put(proof)
         # Submit to chain immediately

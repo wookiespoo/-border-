@@ -199,6 +199,11 @@ class BorderNode:
 
         @app.route("/chain/mine", methods=["POST"])
         def mine():
+            # Security: only allow mining requests from localhost to prevent
+            # arbitrary peers from triggering block creation / reward claims.
+            remote = request.remote_addr or ""
+            if remote not in ("127.0.0.1", "::1", "localhost"):
+                return jsonify({"ok": False, "error": "mine endpoint is local-only"}), 403
             block = self.chain.create_block(
                 miner_address=self.wallet.address
             )

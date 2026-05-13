@@ -17,7 +17,7 @@ def make_funded_chain(initial_bc=100.0):
     """Chain with a funded wallet ready for staking tests."""
     wallet = BorderWallet.create()
     chain = BorderChain()
-    # Mine a block to give the wallet some BC
+    # Mine a block to give the wallet some BC (proof must be properly signed)
     proof = BandwidthProof(
         receipt_id="receipt_stake_test",
         relay_address=wallet.address,
@@ -25,11 +25,14 @@ def make_funded_chain(initial_bc=100.0):
         bytes_forwarded=200 * 1024 * 1024,  # 200 MB > MIN_DIFFICULTY
         timestamp=time.time(),
         session_id="sess_001",
-        relay_signature="sig_001",
+        relay_signature="",
+        relay_public_key=wallet.public_key_b64,
     )
+    proof.relay_signature = wallet.sign(proof.hash().encode())
     chain.add_proof(proof)
     block = chain.create_block(miner_address=wallet.address)
-    chain.add_block(block)
+    ok, msg = chain.add_block(block)
+    assert ok, f"Block add failed: {msg}"
     return chain, wallet
 
 

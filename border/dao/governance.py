@@ -149,12 +149,23 @@ class GovernanceEngine:
         if ptype == ProposalType.PARAMETER:
             key = payload.get("key")
             val = payload.get("value")
-            if key and val is not None:
-                self.parameters[key] = val
-                self.treasury.apply_parameter(key, val)
-                logger.info(f"[DAO] Parameter set: {key} = {val}")
-                return True, f"parameter_updated:{key}={val}"
-            return False, "invalid_parameter_payload"
+            # Whitelist: only known numeric parameters may be changed via governance
+            ALLOWED_PARAMETER_KEYS = {
+                "tx_fee_pct", "min_stake_to_work", "bc_per_gb_per_day",
+                "bc_per_compute_hour", "bc_per_inference_token",
+                "block_reward", "min_bytes_per_block",
+                "compute_reward_multiplier", "storage_reward_multiplier",
+            }
+            if not key or key not in ALLOWED_PARAMETER_KEYS:
+                return False, f"parameter key '{key}' not in governance whitelist"
+            if val is None or not isinstance(val, (int, float)):
+                return False, "parameter value must be a number"
+            if val < 0:
+                return False, "parameter value must be non-negative"
+            self.parameters[key] = val
+            self.treasury.apply_parameter(key, val)
+            logger.info(f"[DAO] Parameter set: {key} = {val}")
+            return True, f"parameter_updated:{key}={val}"
 
         if ptype == ProposalType.TREASURY:
             recipient = payload.get("recipient")
@@ -176,8 +187,18 @@ class GovernanceEngine:
         if ptype == ProposalType.SLASH:
             target  = payload.get("target_address")
             amount  = payload.get("slash_amount_bc", 0.0)
-            logger.info(f"[DAO] Slash executed: {target[:20]}... -{amount} BC")
-            return True, f"slashed:{target}:{amount}"
+            if not target or amount <= 0:
+                return False, "invalid_slash_payload"
+            # Wire to the chain's slash mechanism if available
+            if self.chain is not None:
+                ok, msg = self.chain.slash(target, amount, reason=f"DAO proposal {proposal.proposal_id}")
+                if not ok:
+                    return False, f"slash_failed: {msg}"
+                logger.info(f"[DAO] Slash executed on-chain: {target[:20]}... -{amount} BC")
+                return True, f"slashed:{target}:{amount}"
+            # Chain not wired — log only (testnet / unit test mode)
+            logger.warning(f"[DAO] Slash logged (no chain): {target[:20]}... -{amount} BC")
+            return True, f"slashed_logged:{target}:{amount}"
 
         # CUSTOM — log and mark executed
         logger.info(f"[DAO] Custom proposal executed: {proposal.title}")

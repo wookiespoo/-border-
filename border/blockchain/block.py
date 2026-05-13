@@ -37,21 +37,50 @@ class BandwidthProof:
     timestamp:        float
     session_id:       str
     relay_signature:  str
+    relay_public_key: str = ""           # Ed25519 pubkey of relay — binds sig to address
     client_signature: Optional[str] = None
 
     def hash(self) -> str:
         content = f"{self.relay_address}:{self.client_id}:{self.bytes_forwarded}:{self.timestamp}"
         return hashlib.sha256(content.encode()).hexdigest()
 
+    def verify_signature(self) -> bool:
+        """Verify relay_signature and that relay_public_key derives to relay_address."""
+        if not self.relay_signature or not self.relay_public_key:
+            return False
+        from .wallet import BorderWallet
+        # 1. Verify public key → address binding
+        try:
+            import base64
+            pub_bytes = base64.b64decode(self.relay_public_key)
+            derived = "BC_" + hashlib.sha256(pub_bytes).hexdigest()[:32]
+            if derived != self.relay_address:
+                return False
+        except Exception:
+            return False
+        # 2. Verify Ed25519 signature over the canonical hash
+        return BorderWallet.verify(self.relay_public_key, self.hash().encode(), self.relay_signature)
+
     def to_dict(self) -> dict:
         return {"receipt_id":self.receipt_id,"relay_address":self.relay_address,
                 "client_id":self.client_id,"bytes_forwarded":self.bytes_forwarded,
                 "timestamp":self.timestamp,"session_id":self.session_id,
-                "relay_signature":self.relay_signature,"client_signature":self.client_signature}
+                "relay_signature":self.relay_signature,"relay_public_key":self.relay_public_key,
+                "client_signature":self.client_signature}
 
     @classmethod
     def from_dict(cls, d: dict) -> "BandwidthProof":
-        return cls(**d)
+        return cls(
+            receipt_id       = d["receipt_id"],
+            relay_address    = d["relay_address"],
+            client_id        = d["client_id"],
+            bytes_forwarded  = d["bytes_forwarded"],
+            timestamp        = d["timestamp"],
+            session_id       = d["session_id"],
+            relay_signature  = d.get("relay_signature", ""),
+            relay_public_key = d.get("relay_public_key", ""),
+            client_signature = d.get("client_signature"),
+        )
 
     @property
     def border_coin_value(self) -> float:
@@ -124,6 +153,15 @@ class StorageProofRecord:
         if not self.node_signature or not self.node_public_key:
             return False
         from .wallet import BorderWallet
+        # Verify public key → address binding
+        try:
+            import base64
+            pub_bytes = base64.b64decode(self.node_public_key)
+            derived = "BC_" + hashlib.sha256(pub_bytes).hexdigest()[:32]
+            if derived != self.node_address:
+                return False
+        except Exception:
+            return False
         return BorderWallet.verify(
             self.node_public_key,
             self.hash().encode(),

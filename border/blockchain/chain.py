@@ -6,6 +6,7 @@ Proof of Bandwidth + Proof of Compute + Proof of Storage.
 from __future__ import annotations
 
 import json
+import threading
 from .store import ChainStore
 import logging
 import time
@@ -51,6 +52,8 @@ class BorderChain:
         self._stakes: Dict[str, dict] = {}
         # Slash log: list of {"address", "amount", "reason", "timestamp"}
         self._slash_log: List[dict] = []
+        # Thread safety: Flask runs threaded=True; guard chain state with a reentrant lock
+        self._lock = threading.RLock()
 
         if self._store is not None:
             # SQLite persistence path
@@ -141,6 +144,10 @@ class BorderChain:
         return block
 
     def add_block(self, block: Block) -> Tuple[bool, str]:
+        with self._lock:
+            return self._add_block_locked(block)
+
+    def _add_block_locked(self, block: Block) -> Tuple[bool, str]:
         valid, reason = self._validate_block(block)
         if not valid:
             return False, reason
@@ -280,6 +287,8 @@ class BorderChain:
         for proof in block.bandwidth_proofs:
             if proof.receipt_id in self._spent_receipts:
                 return False, f"double-spend: receipt {proof.receipt_id}"
+            if not proof.verify_signature():
+                return False, f"bandwidth proof signature invalid: {proof.receipt_id}"
         for proof in block.storage_proofs:
             if not proof.verify_signature():
                 return False, f"storage proof signature invalid: {proof.proof_id}"

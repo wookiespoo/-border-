@@ -89,8 +89,10 @@ class BandwidthLedger:
         self,
         node_id: str,
         persist_path: Optional[str] = None,
+        wallet=None,
     ):
         self.node_id = node_id
+        self._wallet = wallet   # Optional[BorderWallet] — used for Ed25519 signing
         self._receipts: List[BandwidthReceipt] = []
         self._client_set: set = set()
         self._persist_path = Path(persist_path) if persist_path else None
@@ -158,11 +160,16 @@ class BandwidthLedger:
         }
 
     def _sign(self, content_hash: str) -> str:
-        """
-        Sign a receipt hash with the node's private key.
-        Simplified: in production uses Ed25519.
-        """
-        # TODO: replace with actual Ed25519 signing
+        """Sign a receipt hash with the node's Ed25519 private key."""
+        if self._wallet is not None:
+            return self._wallet.sign(content_hash.encode())
+        # Fallback: HMAC-style hash (no wallet loaded — dev / test mode only)
+        import warnings
+        warnings.warn(
+            "[Ledger] No wallet provided — receipts are unsigned (dev mode only). "
+            "Pass wallet= to BandwidthLedger for production use.",
+            stacklevel=3,
+        )
         return hashlib.sha256(f"{self.node_id}:{content_hash}".encode()).hexdigest()
 
     def _save(self) -> None:

@@ -22,17 +22,20 @@ def _patch_difficulty(monkeypatch):
 
 
 def make_proof(mb: float = 2.0) -> BandwidthProof:
-    """Create a plausible BandwidthProof for testing."""
+    """Create a properly signed BandwidthProof for testing."""
     w = BorderWallet.create()
-    return BandwidthProof(
+    proof = BandwidthProof(
         receipt_id      = f"r_{uuid.uuid4().hex[:12]}",
         relay_address   = w.address,
         client_id       = "test_client",
         bytes_forwarded = int(mb * 1024 * 1024),
         timestamp       = time.time(),
         session_id      = f"s_{uuid.uuid4().hex[:12]}",
-        relay_signature = "test_sig",
+        relay_signature = "",
+        relay_public_key= w.public_key_b64,
     )
+    proof.relay_signature = w.sign(proof.hash().encode())
+    return proof
 
 
 def make_funded_chain() -> tuple[BorderChain, BorderWallet]:

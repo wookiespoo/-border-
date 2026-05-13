@@ -274,16 +274,36 @@ class ChannelManager:
 
         settled = False
         if self.chain is not None and ch.balance_receiver > 0:
+            # The sender already locked deposit+fee into escrow at open time.
+            # Here we release the receiver's share from that escrow pool.
+            # In production a multi-sig contract (or on-chain escrow address)
+            # would hold the funds and release them here.  We create a
+            # single settlement TX from the escrow symbolic address → receiver,
+            # and return the remainder from escrow → sender.
+            escrow_addr = f"channel_{ch.receiver_address[:8]}"
+            # Since escrow is symbolic, we approximate by sending from sender
+            # (the chain balance was already reduced at open time via the escrow TX).
+            # This TX records the final distribution without double-charging.
             tx_recv = Transaction.create(
-                from_address = sender_wallet.address,
+                from_address = escrow_addr,
                 to_address   = ch.receiver_address,
                 amount       = ch.balance_receiver,
                 private_key  = sender_wallet._private_key,
             )
             self.chain.add_transaction(tx_recv)
+            # Return change from escrow → sender
+            if ch.balance_sender > 0:
+                tx_change = Transaction.create(
+                    from_address = escrow_addr,
+                    to_address   = sender_wallet.address,
+                    amount       = ch.balance_sender,
+                    private_key  = sender_wallet._private_key,
+                )
+                self.chain.add_transaction(tx_change)
             settled = True
             logger.info(
-                f"[Payments] Settled → receiver  {ch.balance_receiver:.8f} BC  "
+                f"[Payments] Settled → receiver {ch.balance_receiver:.8f} BC, "
+                f"change → sender {ch.balance_sender:.8f} BC  "
                 f"channel={channel_id[:8]}"
             )
 

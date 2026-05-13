@@ -38,7 +38,10 @@ def create_p2p_blueprint(node: "P2PNode") -> Blueprint:
     @bp.route("/p2p/ping", methods=["GET"])
     def ping():
         from_host = request.args.get("from_host", "")
-        from_port = int(request.args.get("from_port", 0))
+        try:
+            from_port = int(request.args.get("from_port", 0))
+        except (ValueError, TypeError):
+            from_port = 0
         peer_node_id = request.args.get("node_id", "")
         if from_host and from_port:
             node.discovery.add_peer(from_host, from_port, peer_node_id)
@@ -80,7 +83,10 @@ def create_p2p_blueprint(node: "P2PNode") -> Blueprint:
 
     @bp.route("/p2p/block_hash", methods=["GET"])
     def block_hash():
-        index = int(request.args.get("index", -1))
+        try:
+            index = int(request.args.get("index", -1))
+        except (ValueError, TypeError):
+            return jsonify({"error": "index must be an integer"}), 400
         h = node.chain.block_hash_at(index)
         if h is None:
             return jsonify({"error": "index out of range"}), 404
@@ -88,8 +94,11 @@ def create_p2p_blueprint(node: "P2PNode") -> Blueprint:
 
     @bp.route("/p2p/blocks", methods=["GET"])
     def blocks():
-        start = int(request.args.get("start", 0))
-        end = int(request.args.get("end", start))
+        try:
+            start = int(request.args.get("start", 0))
+            end   = int(request.args.get("end", start))
+        except (ValueError, TypeError):
+            return jsonify({"error": "start/end must be integers"}), 400
         end = min(end, start + 200)   # cap at 200 per request
         blks = node.chain.blocks_range(start, end)
         return jsonify({"blocks": [b.to_dict() for b in blks]})
