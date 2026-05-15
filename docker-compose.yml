@@ -1,96 +1,76 @@
-# Border Protocol — local testnet
-# Brings up 3 nodes: bootstrap (with faucet) + relay + compute
+# Border Protocol — testnet
+# Bootstrap (with faucet) + relay + compute node
 #
 # Usage:
-#   docker compose up --build          # start all nodes
-#   docker compose up bootstrap        # start only bootstrap
-#   docker compose logs -f relay       # tail relay logs
-#   docker compose down -v             # stop + remove volumes
+#   docker compose up -d --build
+#   docker compose logs -f bootstrap
+#   docker compose down -v
 #
-# REST endpoints after startup:
-#   Bootstrap  http://localhost:5000   (+ faucet at /faucet/drip)
-#   Relay      http://localhost:5001
-#   Compute    http://localhost:5002
-#
-# Drip testnet BC:
-#   curl -X POST http://localhost:5000/faucet/drip \
-#        -H "Content-Type: application/json" \
-#        -d '{"address":"BC_your_address_here"}'
+# Endpoints:
+#   Bootstrap  http://184.94.212.199:5000  (faucet at /faucet/drip)
+#   Relay      http://184.94.212.199:5001
+#   Compute    http://184.94.212.199:5002
 
 version: "3.9"
-
 services:
-
-  # ── Bootstrap node (faucet enabled) ───────────────────────────────────────
   bootstrap:
     build: .
     container_name: border-bootstrap
     command:
       - "--host=0.0.0.0"
       - "--port=5000"
-      - "--p2p-port=6000"
-      - "--persist=/data/chain.db"
-      - "--node-type=RELAY"
+      - "--data-dir=/data"
       - "--faucet"
+      - "--verbose"
     ports:
       - "5000:5000"
-      - "6000:6000"
     volumes:
       - bootstrap_data:/data
     environment:
-      - BORDER_NETWORK=testnet
       - PYTHONUNBUFFERED=1
     healthcheck:
       test: ["CMD", "python", "-c",
-             "import urllib.request; urllib.request.urlopen('http://localhost:5000/chain/info')"]
+             "import urllib.request; urllib.request.urlopen('http://localhost:5000/status')"]
       interval: 10s
       timeout: 5s
       retries: 5
     restart: unless-stopped
 
-  # ── Relay node ────────────────────────────────────────────────────────────
   relay:
     build: .
     container_name: border-relay
     command:
       - "--host=0.0.0.0"
       - "--port=5000"
-      - "--p2p-port=6000"
-      - "--persist=/data/chain.db"
-      - "--node-type=RELAY"
-      - "--peers=bootstrap:6000"
+      - "--data-dir=/data"
+      - "--peers=bootstrap:5000"
+      - "--verbose"
     ports:
       - "5001:5000"
-      - "6001:6000"
     volumes:
       - relay_data:/data
     environment:
-      - BORDER_NETWORK=testnet
       - PYTHONUNBUFFERED=1
     depends_on:
       bootstrap:
         condition: service_healthy
     restart: unless-stopped
 
-  # ── Compute node ──────────────────────────────────────────────────────────
   compute:
     build: .
     container_name: border-compute
     command:
       - "--host=0.0.0.0"
       - "--port=5000"
-      - "--p2p-port=6000"
-      - "--persist=/data/chain.db"
-      - "--node-type=COMPUTE"
+      - "--data-dir=/data"
       - "--compute"
-      - "--peers=bootstrap:6000"
+      - "--peers=bootstrap:5000"
+      - "--verbose"
     ports:
       - "5002:5000"
-      - "6002:6000"
     volumes:
       - compute_data:/data
     environment:
-      - BORDER_NETWORK=testnet
       - PYTHONUNBUFFERED=1
     depends_on:
       bootstrap:
