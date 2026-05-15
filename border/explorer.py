@@ -160,7 +160,6 @@ def make_explorer_blueprint(chain) -> Blueprint:
   <a href="/explorer/address/{b.miner_address}">{b.miner_address}</a></span></div>
 <div class="kv-row"><span class="kv-label">Timestamp</span><span class="kv-val">{_fmt_ts(b.timestamp)}</span></div>
 <div class="kv-row"><span class="kv-label">Difficulty</span><span class="kv-val">{b.difficulty}</span></div>
-<div class="kv-row"><span class="kv-label">Nonce</span><span class="kv-val">{b.nonce}</span></div>
 <div class="kv-row"><span class="kv-label">Transactions</span>
   <span class="kv-val">{len(b.transactions)}</span></div>
 <div class="kv-row"><span class="kv-label">Bandwidth Proofs</span>
